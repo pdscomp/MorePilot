@@ -305,3 +305,40 @@ class TestLearnerSanityBounds:
     clipped = np.clip(nudged, lo, hi)
     assert clipped == pytest.approx(nudged, abs=1e-6), \
       f"+10% nudge ({nudged:.3f}) should not be clipped by +/-30% bounds ({lo:.3f}, {hi:.3f})"
+
+
+class TestToggleOffFallback:
+  """When speed-dep is deactivated, controller must not use stale tables."""
+
+  def test_deactivation_via_empty_bins(self):
+    """Simulates toggle-off: update_speed_dep_torque receives empty bins."""
+    ovr = make_override()
+    activate_speed_dep(ovr)
+    assert ovr._speed_dep_active
+
+    # Simulate toggle-off (torqued sends empty speedBinCenters)
+    ovr._speed_dep_active = False
+
+    tp = TorqueParams(latAccelFactor=2.35, friction=0.12)
+    ovr._last_vego = 15.0
+    ovr.update_override_torque_params(tp)
+
+    # Global values should pass through unmodified
+    assert tp.latAccelFactor == 2.35
+    assert tp.friction == 0.12
+
+  def test_reactivation_after_deactivation(self):
+    """Speed-dep can be re-enabled after being disabled."""
+    ovr = make_override()
+    ovr._speed_dep_active = False
+
+    # Re-enable
+    activate_speed_dep(ovr)
+    assert ovr._speed_dep_active
+
+    tp = TorqueParams()
+    ovr._last_vego = 15.0
+    ovr.update_override_torque_params(tp)
+
+    expected_laf = float(np.interp(15.0, SAMPLE_SPEED_BP, SAMPLE_LAF_BP))
+    assert tp.latAccelFactor == pytest.approx(expected_laf, abs=1e-4)
