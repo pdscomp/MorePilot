@@ -158,3 +158,57 @@ class TestIcbmDeadband:
         cluster -= 1  # dash responds ~1 mph per press
     assert cluster == 35.
     assert self.icbm.state == State.holding
+
+
+class TestDecelOvershoot:
+  """Down-only overshoot: command the dash below the planner target so the stock ACC
+  delivers the requested deceleration (its decel scales with dash-vs-vEgo gap)."""
+
+  def make_icbm(self, brand="mazda"):
+    return IntelligentCruiseButtonManagement(car.CarParams(pcmCruise=True, brand=brand),
+                                             custom.CarParamsSP(pcmCruiseSpeed=False))
+
+  def run_frames(self, icbm, target_mph, v_ego_mph, a_target, n=1, source='sccVision', enabled=True):
+    for _ in range(n):
+      CS = car.CarState(vEgo=v_ego_mph * CV.MPH_TO_MS,
+                        cruiseState={"speedCluster": target_mph * CV.MPH_TO_MS})
+      CC = car.CarControl(enabled=True)
+      LP_SP = custom.LongitudinalPlanSP(vTarget=target_mph * CV.MPH_TO_MS, aTarget=a_target)
+      LP_SP.longitudinalPlanSource = source
+      icbm.run(CS, CC, LP_SP, is_metric=False, decel_overshoot_enabled=enabled)
+
+  def test_commands_below_target_when_decelerating(self):
+    icbm = self.make_icbm()
+    # planner wants -0.45 m/s^2 at 45 mph toward a 40 mph target: needs a ~6 mph gap below vEgo
+    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100)
+    assert icbm.v_target <= 39, icbm.v_target
+    assert icbm.v_target >= 37, icbm.v_target
+
+  def test_deep_dip_is_a_no_op(self):
+    """When the target is already far below vEgo the plant is saturated; never go deeper."""
+    icbm = self.make_icbm()
+    self.run_frames(icbm, target_mph=20, v_ego_mph=45, a_target=-1.0, n=100)
+    assert icbm.v_target == 20, icbm.v_target
+
+  def test_releases_back_to_target(self):
+    icbm = self.make_icbm()
+    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100)
+    assert icbm.v_target < 40
+    # decel demand ends; command must return to the target (slew-limited release)
+    self.run_frames(icbm, target_mph=40, v_ego_mph=40, a_target=0.0, n=400)
+    assert icbm.v_target == 40, icbm.v_target
+
+  def test_cruise_source_never_overshoots(self):
+    icbm = self.make_icbm()
+    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100, source='cruise')
+    assert icbm.v_target == 40, icbm.v_target
+
+  def test_mazda_only(self):
+    icbm = self.make_icbm(brand="hyundai")
+    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100)
+    assert icbm.v_target == 40, icbm.v_target
+
+  def test_toggle_off_disables_overshoot(self):
+    icbm = self.make_icbm()
+    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100, enabled=False)
+    assert icbm.v_target == 40, icbm.v_target

@@ -77,6 +77,25 @@ landed while ICBM was mid-send in 4 days of data; the ECU never miscounted inter
    in `map_controller.py` made the moderate-curve deceleration distance ~11x too small, so map
    slowdowns started far too late. With the fix a 40 m waypoint at 25 m/s is detected (~45 m
    deceleration envelope vs ~4 m before).
+7. **Deceleration overshoot** (ICBM controller; per-brand plant table, only Mazda populated):
+   the stock ACC's deceleration
+   scales with the dash-vs-ACTUAL-speed gap, not dash-vs-target. Measured response curve
+   (422k hands-off cruise samples): ~0.09 m/s² per mph of gap, dead below ~2 mph, saturating
+   near −0.75 m/s² by ~9 mph; decel onset lag ~1.0–1.3 s (n=4, preliminary). Commanding
+   dash = target therefore does almost nothing until the car is already several mph hot.
+   When the planner demands decel (`aTarget < −0.15`, source sccVision/sccMap/SLA), ICBM now
+   commands `dash = vEgo − gap(aTarget)` (inverse plant map), capped at the planner target
+   from above — down-only, so a stale command fail-safes to the car slowing. The command
+   tracks vEgo through the maneuver and releases back to the target automatically as the car
+   converges and `aTarget` relaxes (slew: 10 mph/s apply, 3 mph/s release to avoid pumping
+   the ECU's discrete coast/downshift/brake stages). Closed-loop sim against the measured
+   plant, moderate curve approach (45→33 mph over 12 s): arrival overspeed 6.7 → 3.6 mph,
+   overspeed exposure −48%. Deep dips are unaffected (plant already saturated; the cap makes
+   overshoot a no-op there, verified on the recorded 45→21 mph episode).
+   Opt-in via the `SmartCruiseDecelOvershoot` toggle (default off): selfdrived reads it and
+   passes it into `icbm.run()` (same pattern as `is_metric`); exposed in the MICI cruise
+   layout ("decel overshoot"), the TICI cruise settings, and sunnylink SDUI — all gated on
+   ICBM active + brand present in `DECEL_OVERSHOOT_PARAMS`.
 
 Tests: `sunnypilot/selfdrive/car/tests/test_icbm_cruise.py`,
 `opendbc…/sunnypilot/car/mazda/tests/test_icbm_pacing.py`,
@@ -88,5 +107,9 @@ Tests: `sunnypilot/selfdrive/car/tests/test_icbm_cruise.py`,
   0.3 s persistence filter blunts it, but the planner-side map sampling deserves a look. Note
   the PR #1816 fix changes map-controller timing substantially — re-check map behavior on the
   next drives.
+- Validation drive items: (a) confirm the ECU counts every press at the 0.1 s ramp pace
+  (compare `sent_setp` vs dash steps with the scanner; back off to 0.15 s if presses drop);
+  (b) more decel-onset-lag samples (only 4 clean events in the dataset); (c) observe the
+  overshoot behavior on a real curve — the plant model is built from steady-state bins.
 - The kph/mph lattice skew (openpilot 1.6/8.0 kph steps vs dash 1.609/8.047) leaves a harmless
   ≤0.5 kph residual; dash re-sync absorbs it around manual presses.
