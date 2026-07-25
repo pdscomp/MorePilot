@@ -41,14 +41,11 @@ def setup_params():
   params.put("CarParamsSPPersistent", cp_sp.to_bytes())
   params.put_bool("IntelligentCruiseButtonManagement", True)
 
-  # Visuals
+  # Visuals (only the toggles the MICI visuals layout renders)
   params.put_bool("BlindSpot", True)
-  params.put_bool("TorqueBar", True)
-  params.put_bool("RoadNameToggle", True)
-  params.put_bool("TrueVEgoUI", True)
-  params.put_bool("ShowTurnSignals", True)
-  params.put("ChevronInfo", 3)
-  params.put("DevUIInfo", 1)
+  params.put_bool("RainbowMode", True)
+  params.put_bool("GreenLightAlert", True)
+  params.put_bool("LeadDepartAlert", True)
 
   # Display
   params.put("OnroadScreenOffBrightness", 10)
