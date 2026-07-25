@@ -69,8 +69,9 @@ def setup_params():
   params.put_bool("LiveTorqueParamsRelaxedToggle", True)
   params.put_bool("CustomTorqueParams", True)
   params.put_bool("TorqueParamsOverrideEnabled", True)
-  params.put("TorqueParamsOverrideLatAccelFactor", 250.0)
-  params.put("TorqueParamsOverrideFriction", 50.0)
+  # physical values — the picker scales x100 for its 1..500 / 1..100 integer domain
+  params.put("TorqueParamsOverrideLatAccelFactor", 2.5)
+  params.put("TorqueParamsOverrideFriction", 0.5)
 
   # Cruise
   params.put_bool("CustomAccIncrementsEnabled", True)
