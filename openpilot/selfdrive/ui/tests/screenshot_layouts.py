@@ -15,7 +15,8 @@ os.environ.setdefault("SCALE", "1")
 import pyray as rl
 
 from pathlib import Path
-from cereal import car, custom
+from opendbc.car.structs import car
+from openpilot.cereal import custom
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
 
@@ -63,6 +64,7 @@ def setup_params():
   params.put("BlinkerMinLateralControlSpeed", 25)
   params.put("BlinkerLateralReengageDelay", 3)
   params.put_bool("EnforceTorqueControl", True)
+  params.put("TorqueControlTune", 1.0)
   params.put_bool("LiveTorqueParamsToggle", True)
   params.put_bool("LiveTorqueParamsRelaxedToggle", True)
   params.put_bool("CustomTorqueParams", True)
