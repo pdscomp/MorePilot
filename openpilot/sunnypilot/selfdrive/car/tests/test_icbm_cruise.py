@@ -5,11 +5,14 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 
 Tests for ICBM (non-pcmCruiseSpeed) cruise handling:
-- dash re-sync: the real dash is the source of truth around driver button presses
+- setpoint reconciliation: around driver presses the dash is the source of truth, but only
+  when the plan source is cruise and ICBM is not mid-move (single-writer setpoint)
+- SLA button ownership: while SLA is active, +/- presses never increment v_cruise
 - ICBM state machine reaction deadband and persistence timer
 - the vEgo clip on SET- while overriding is disabled for ICBM cars
 """
-from cereal import car, custom
+from openpilot.cereal import custom
+from opendbc.car.structs import car
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.selfdrive.car.cruise import VCruiseHelper, IMPERIAL_INCREMENT
@@ -32,7 +35,7 @@ def make_car_state(dash_kph=0., gas_pressed=False, button_events=None, available
   return CS
 
 
-class TestDashSync:
+class TestSetpointReconcile:
   """pcmCruise (stock ACC) car with ICBM enabled (pcmCruiseSpeed=False)."""
 
   def setup_method(self):
@@ -40,6 +43,16 @@ class TestDashSync:
     self.CP = car.CarParams(pcmCruise=True)
     self.CP_SP = custom.CarParamsSP(pcmCruiseSpeed=False)
     self.v_cruise_helper = VCruiseHelper(self.CP, self.CP_SP)
+
+  def set_regime(self, source='cruise', icbm_state='inactive', sla_state='disabled', limit_kph=0.):
+    LP_SP = custom.LongitudinalPlanSP()
+    LP_SP.longitudinalPlanSource = source
+    LP_SP.speedLimit.assist.state = sla_state
+    LP_SP.speedLimit.resolver.speedLimitFinalLast = limit_kph * CV.KPH_TO_MS
+    LP_SP.speedLimit.resolver.speedLimitLastValid = limit_kph > 0
+    CC_SP = custom.CarControlSP()
+    CC_SP.intelligentCruiseButtonManagement.state = icbm_state
+    self.v_cruise_helper.update_speed_limit_assist(False, LP_SP, CC_SP)
 
   def run_frames(self, CS, n=1, enabled=True):
     for _ in range(n):
@@ -79,16 +92,65 @@ class TestDashSync:
     assert abs(self.v_cruise_helper.v_cruise_kph - 40 * MPH) < 0.5
 
   def test_no_adoption_while_scc_limited(self):
-    """When ICBM holds the dash away from v_cruise (smart cruise), a press must not clobber v_cruise."""
+    """When a limiter drives the plan, the dash is held away from v_cruise by design —
+    a press must increment v_cruise, never adopt the limiter-held dash."""
     self.engage_at(45 * MPH)
+    self.set_regime(source='sccVision')
     # smart cruise pushed the real dash down to 35 mph while v_cruise stays at 45 mph
-    self.run_frames(make_car_state(dash_kph=35 * MPH), n=110)  # past any leftover sync window
+    self.run_frames(make_car_state(dash_kph=35 * MPH), n=110)
     assert abs(self.v_cruise_helper.v_cruise_kph - 45 * MPH) < 0.1
 
     self.press(ButtonType.accelCruise, dash_kph=35 * MPH)
     self.run_frames(make_car_state(dash_kph=36 * MPH), n=20)
     # v_cruise took its own +1 mph increment, not the dash value
     assert abs(self.v_cruise_helper.v_cruise_kph - (45 * MPH + IMPERIAL_INCREMENT)) < 0.5
+
+  def test_no_adoption_while_icbm_mid_move(self):
+    """After an SLA abort the servo restores the dash; the press's settle window must not
+    adopt the still-low dash while ICBM is stepping it back up."""
+    self.engage_at(60 * MPH)
+    self.set_regime(source='cruise', icbm_state='increasing')
+
+    self.press(ButtonType.accelCruise, dash_kph=45 * MPH)
+    self.run_frames(make_car_state(dash_kph=47 * MPH), n=20)
+    assert abs(self.v_cruise_helper.v_cruise_kph - (60 * MPH + IMPERIAL_INCREMENT)) < 0.5
+
+  def test_sla_owns_buttons_no_increment(self):
+    """While SLA is active, +/- presses carry SLA semantics; v_cruise must not increment."""
+    self.engage_at(60 * MPH)
+    self.set_regime(source='speedLimitAssist', sla_state='active', limit_kph=45 * MPH)
+
+    self.press(ButtonType.accelCruise, dash_kph=45 * MPH)
+    assert abs(self.v_cruise_helper.v_cruise_kph - 60 * MPH) < 0.1
+
+  def test_sla_settled_press_reanchors_to_dash(self):
+    """Settled at a limit, a + press deactivates SLA (plannerd side) and the setpoint
+    re-anchors to the ECU's dash response — stock button feel."""
+    self.engage_at(60 * MPH)
+    self.set_regime(source='speedLimitAssist', sla_state='active', limit_kph=45 * MPH)
+    self.run_frames(make_car_state(dash_kph=45 * MPH), n=110)
+    assert abs(self.v_cruise_helper.v_cruise_kph - 60 * MPH) < 0.1
+
+    # press lands while SLA is still active: no increment (owned by SLA)
+    self.press(ButtonType.accelCruise, dash_kph=45 * MPH)
+    # SLA deactivates on the press, plan source returns to cruise, servo is idle;
+    # the ECU stepped the dash to 46 — adopt it inside the settle window
+    self.set_regime(source='cruise', icbm_state='holding', sla_state='inactive')
+    self.run_frames(make_car_state(dash_kph=46 * MPH), n=20)
+    assert abs(self.v_cruise_helper.v_cruise_kph - 46 * MPH) < 0.5
+
+  def test_sla_abort_press_keeps_baseline(self):
+    """Mid-decrease for SLA, a + press aborts: the baseline must survive untouched while
+    the servo walks the dash back up."""
+    self.engage_at(60 * MPH)
+    self.set_regime(source='speedLimitAssist', sla_state='active', limit_kph=45 * MPH)
+
+    # servo is halfway down (dash 52) when the driver presses +
+    self.press(ButtonType.accelCruise, dash_kph=52 * MPH)
+    # SLA deactivates; servo restores (increasing) — dash still low during the settle window
+    self.set_regime(source='cruise', icbm_state='increasing', sla_state='inactive')
+    self.run_frames(make_car_state(dash_kph=53 * MPH), n=20)
+    assert abs(self.v_cruise_helper.v_cruise_kph - 60 * MPH) < 0.1
 
   def test_vego_clip_disabled_for_icbm(self):
     """SET- while on the gas decrements on the stock ECU; v_cruise must not jump up to vEgo."""
