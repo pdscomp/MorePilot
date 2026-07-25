@@ -204,16 +204,21 @@ class Loop:
       events = []
       if self.tick_n in self.driver_queue:
         button, hold_ticks = self.driver_queue.pop(self.tick_n)
-        self._driver_active = [button, hold_ticks]
+        self._driver_active = [button, hold_ticks, hold_ticks]
         events.append(ButtonEvent(type=button, pressed=True))
       driver_tap_dir = 0
+      driver_hold_dir = 0
       if self._driver_active is not None:
-        button, remaining = self._driver_active
+        button, remaining, total = self._driver_active
         self._driver_active[1] -= 1
+        if total - self._driver_active[1] > 30:
+          # a physical hold reaches the ECU's hold integrator (genuine frames carry it)
+          driver_hold_dir = 1 if button == ButtonType.accelCruise else -1
         if self._driver_active[1] <= 0:
           events.append(ButtonEvent(type=button, pressed=False))
           self._driver_active = None
-          driver_tap_dir = 1 if button == ButtonType.accelCruise else -1  # ECU applies on release for short presses
+          if total <= 30:
+            driver_tap_dir = 1 if button == ButtonType.accelCruise else -1  # ECU applies short presses on release
 
       # one CarState per tick, shared by all three consumers (none mutates it)
       CS = self._cs(events)
@@ -235,16 +240,16 @@ class Loop:
       self._card_tick(CS, lp_msg=lp_msg, cc_msg=cc_msg)
 
       # ECU: driver's physical press + openpilot's emission
-      tap_dir, hold_dir = driver_tap_dir, 0
+      tap_dir, hold_dir = driver_tap_dir, driver_hold_dir
       sb = self.servo.cruise_button
       if sb == SendButtonState.increase:
         tap_dir = tap_dir or 1
       elif sb == SendButtonState.decrease:
         tap_dir = tap_dir or -1
       elif sb == SendButtonState.increaseHold:
-        hold_dir = 1
+        hold_dir = hold_dir or 1
       elif sb == SendButtonState.decreaseHold:
-        hold_dir = -1
+        hold_dir = hold_dir or -1
       self.ecu.tick(tap_dir=tap_dir, hold_dir=hold_dir)
 
       if assert_each is not None:
@@ -361,3 +366,108 @@ class TestSlaSession:
     assert loop.servo.longpress_faulted
     assert loop.ecu.dash == 45, f"taps fallback never landed: {loop.ecu.dash}"
     assert loop.sla.state == SlaState.active
+
+
+class TestPressTimingSweeps:
+  """Every shipped bug in this stack was a single driver press racing the 20 Hz SLA
+  cycle, the reconcile window, or the servo state. These sweeps land the same press at
+  offsets spanning more than one full SLA cycle and assert the outcome INVARIANTS —
+  the system must converge to one coherent state at every phase, never a hybrid."""
+
+  OFFSETS_S = (0.0, 0.03, 0.07, 0.11, 0.16, 0.21)
+
+  def _settled_session(self, seed):
+    loop = Loop(baseline_mph=60, seed=seed)
+    loop.limit_mph = 45
+    loop.run(2.0)
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)
+    loop.run(1.0)
+    assert loop.sla.state == SlaState.active
+    loop.run(10.0)
+    assert loop.ecu.dash == 45
+    return loop
+
+  def test_settled_press_at_any_phase_reanchors(self):
+    for offset in self.OFFSETS_S:
+      loop = self._settled_session(seed=10)
+      loop.run(offset)
+      loop.driver_press(ButtonType.accelCruise, in_seconds=0.01)
+      loop.run(6.0)
+      assert loop.sla.state == SlaState.inactive, f"offset {offset}"
+      assert loop.ecu.dash == 46, f"offset {offset}: dash {loop.ecu.dash}"
+      assert loop.v_cruise_mph == 46, f"offset {offset}: setpoint {loop.v_cruise_mph}"
+
+  def test_mid_move_press_at_any_phase_converges(self):
+    """Abort mid-walk at every phase. Deep in the walk the baseline must survive and
+    restore exactly; within the ±2 mph agreement band of the limit the press counts as
+    settled and re-anchors — either way the system converges (setpoint == dash) and the
+    baseline is never left corrupted at some in-between value."""
+    for offset in self.OFFSETS_S:
+      loop = Loop(baseline_mph=60, seed=11)
+      loop.limit_mph = 45
+      loop.run(2.0)
+      loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)
+      loop.run(1.0)
+      assert loop.sla.state == SlaState.active
+
+      loop.run(0.9 + offset)  # somewhere in the walk
+      dash_at_press = loop.ecu.dash
+      loop.driver_press(ButtonType.accelCruise, in_seconds=0.01)
+      loop.run(14.0)
+
+      assert loop.sla.state == SlaState.inactive, f"offset {offset}"
+      assert loop.v_cruise_mph == loop.ecu.dash, \
+        f"offset {offset}: diverged (dash {loop.ecu.dash}, setpoint {loop.v_cruise_mph})"
+      if abs(dash_at_press - 45) > 3:
+        assert loop.ecu.dash == 60, f"offset {offset}: baseline not restored from {dash_at_press}: {loop.ecu.dash}"
+
+
+class TestDriverInteractions:
+  def test_settled_longpress_climbs_and_reanchors(self):
+    """The most common real exit from a zone: settled at the limit, the driver HOLDS +
+    to climb. The ECU snaps along its 5 mph grid (possibly with a trailing step), the
+    increments stay suppressed (SLA owned the press), and the setpoint re-anchors to
+    wherever the ECU landed — with no servo fight afterward."""
+    loop = Loop(baseline_mph=60, seed=12)
+    loop.limit_mph = 45
+    loop.run(2.0)
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)
+    loop.run(11.0)
+    assert loop.ecu.dash == 45
+
+    loop.driver_press(ButtonType.accelCruise, in_seconds=0.1, hold_s=1.3)
+    loop.run(6.0)
+    assert loop.sla.state == SlaState.inactive
+    assert loop.ecu.dash % 5 == 0 and loop.ecu.dash >= 50, f"no grid climb: {loop.ecu.dash}"
+    assert loop.v_cruise_mph == loop.ecu.dash, \
+      f"setpoint must re-anchor to the ECU result: dash {loop.ecu.dash}, setpoint {loop.v_cruise_mph}"
+    dash_settled = loop.ecu.dash
+    loop.run(4.0)
+    assert loop.ecu.dash == dash_settled, "servo fought the driver's hold result"
+
+  def test_press_during_scc_dip_with_sla_session(self):
+    """Two limiters overlapping: settled SLA session, then a curve dips below it. A +
+    press dismisses the SLA session but must NOT lift the curve limit or corrupt the
+    baseline; once the dip clears, the restore goes all the way to the baseline (the
+    dismissed session must not re-grab at 45)."""
+    loop = Loop(baseline_mph=60, seed=13)
+    loop.limit_mph = 45
+    loop.run(2.0)
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)
+    loop.run(11.0)
+    assert loop.ecu.dash == 45
+
+    loop.scc_dip_mph = 40
+    loop.run(5.0)
+    assert loop.ecu.dash <= 41, f"dash never followed the dip: {loop.ecu.dash}"
+
+    loop.driver_press(ButtonType.accelCruise, in_seconds=0.1)
+    loop.run(2.0)
+    assert loop.sla.state == SlaState.inactive
+    assert loop.ecu.dash <= 42, "the press must not lift the still-active curve limit"
+    assert loop.v_cruise_mph == 60, f"baseline corrupted: {loop.v_cruise_mph}"
+
+    loop.scc_dip_mph = 0.
+    loop.run(14.0)
+    assert loop.ecu.dash == 60, f"restore stopped short: {loop.ecu.dash}"
+    assert loop.v_cruise_mph == 60
