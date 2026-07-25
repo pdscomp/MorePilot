@@ -1,0 +1,362 @@
+"""
+Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
+
+This file is part of sunnypilot and is licensed under the MIT License.
+See the LICENSE.md file in the root directory for more details.
+
+Closed-loop integration tests for the ICBM + SLA + driver-setpoint stack.
+
+Unit tests validate each layer alone; the bugs this stack has actually shipped were all
+INTERACTIONS: the confirm press tearing down its own session through the cluster guard,
+the deadband stranding the restore the servo itself created, the dash re-sync adopting a
+limiter-held dash. So this harness wires the real production classes together —
+VCruiseHelper (card), SpeedLimitAssist (plannerd, 20 Hz), the ICBM servo (selfdrived) —
+against a simulated Mazda body ECU with the measured imperfections:
+
+- taps register at most every 200 ms, and ~7% are dropped (seeded, deterministic)
+- a sustained hold snaps to the next 5 mph multiple after ~0.6 s, then every ~0.55 s,
+  with a trailing extra step if released mid-cycle
+- a registered press takes ~60 ms to change the dash
+
+It also models the two DIFFERENT cluster views the real system has: SLA and the planner
+see openpilot's own vCruiseCluster (= v_cruise on ICBM cars), while the servo and the
+reconciler see the car's real dash from CAN. Conflating those two is exactly the class of
+bug this file exists to catch.
+"""
+import random
+
+from openpilot.cereal import custom
+from opendbc.car.structs import car
+from openpilot.common.constants import CV
+from openpilot.common.params import Params
+from openpilot.common.realtime import DT_CTRL
+from openpilot.selfdrive.car.cruise import VCruiseHelper
+from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.controller import IntelligentCruiseButtonManagement
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist
+from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
+
+ButtonEvent = car.CarState.ButtonEvent
+ButtonType = car.CarState.ButtonEvent.Type
+SendButtonState = custom.IntelligentCruiseButtonManagement.SendButtonState
+SlaState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
+PlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
+
+MPH_MS = CV.MPH_TO_MS
+MPH_KPH = CV.MPH_TO_KPH
+
+TAP_REGISTER_S = 0.2
+TAP_DROP_RATE = 0.07
+TAP_LATENCY_S = 0.06
+HOLD_FIRST_STEP_S = 0.6
+HOLD_STEP_PERIOD_S = 0.55
+HOLD_TRAILING_RATE = 0.15
+
+
+class FakeMazdaEcu:
+  """The body ECU's cruise set-speed integrator, driven at 100 Hz.
+
+  hold_mode models the open question of how a real ECU integrates SYNTHESIZED holds
+  (forged button-down frames interleaved with the wheel's genuine button-up frames):
+    'snap'    — integrates them like a physical hold: 5 mph grid steps (best case)
+    'taps'    — registers them as paced discrete presses: same net progress as taps
+    'ignored' — rejects them outright: zero movement (worst case; must trip the fallback)
+  """
+
+  def __init__(self, dash_mph, seed=0, hold_mode='snap'):
+    self.dash = dash_mph
+    self.rng = random.Random(seed)
+    self.hold_mode = hold_mode
+    self.t = 0.
+    self.last_tap_t = -1.
+    self.hold_dir = 0
+    self.hold_t = 0.
+    self.hold_steps = 0
+    self.pending = []  # (apply_t, delta or 'snap'±1)
+
+  def _register_tap(self, direction):
+    if self.t - self.last_tap_t < TAP_REGISTER_S:
+      return
+    self.last_tap_t = self.t
+    if self.rng.random() < TAP_DROP_RATE:
+      return
+    self.pending.append((self.t + TAP_LATENCY_S, direction))
+
+  def _snap(self, direction):
+    # step to the next multiple of 5 strictly in `direction`
+    grid = 5 * ((self.dash // 5) + (1 if direction > 0 else 0)) if self.dash % 5 else self.dash + 5 * direction
+    return grid - self.dash if self.dash % 5 else 5 * direction
+
+  def tick(self, tap_dir=0, hold_dir=0):
+    """tap_dir/hold_dir: -1/0/+1 for this 10 ms tick. Returns current dash (mph)."""
+    self.t += DT_CTRL
+
+    if tap_dir != 0:
+      self._register_tap(tap_dir)
+
+    if hold_dir != 0 and self.hold_mode == 'snap':
+      if self.hold_dir != hold_dir:
+        self.hold_dir, self.hold_t, self.hold_steps = hold_dir, 0., 0
+      self.hold_t += DT_CTRL
+      due = HOLD_FIRST_STEP_S + self.hold_steps * HOLD_STEP_PERIOD_S
+      if self.hold_t >= due:
+        self.pending.append((self.t + TAP_LATENCY_S, 'snap' if self.hold_steps == 0 else 5 * hold_dir))
+        self.hold_steps += 1
+    elif hold_dir != 0 and self.hold_mode == 'taps':
+      self._register_tap(hold_dir)
+    elif hold_dir != 0:  # 'ignored'
+      pass
+    else:
+      if self.hold_dir != 0 and self.hold_steps > 0 and self.rng.random() < HOLD_TRAILING_RATE:
+        self.pending.append((self.t + TAP_LATENCY_S, 5 * self.hold_dir))
+      self.hold_dir, self.hold_t, self.hold_steps = 0, 0., 0
+
+    for apply_t, delta in [p for p in self.pending]:
+      if self.t >= apply_t:
+        self.pending.remove((apply_t, delta))
+        if delta == 'snap':
+          self.dash += self._snap(1 if self.hold_dir >= 0 else -1) if self.hold_dir else 0
+        else:
+          self.dash += delta
+        self.dash = max(20, min(90, self.dash))
+    return self.dash
+
+
+class Loop:
+  """100 Hz co-simulation of card + plannerd (20 Hz) + selfdrived + the fake ECU."""
+
+  def __init__(self, baseline_mph=60, seed=0, hold_mode='snap'):
+    params = Params()
+    params.put("IsReleaseSpBranch", True, block=True)
+    params.put("SpeedLimitMode", int(Mode.assist), block=True)
+    params.put_bool("IsMetric", False, block=True)
+    params.put_bool("CustomAccIncrementsEnabled", False)
+
+    CP = car.CarParams(pcmCruise=True, brand="mazda")
+    CP_SP = custom.CarParamsSP(pcmCruiseSpeed=False)
+    self.helper = VCruiseHelper(CP, CP_SP)
+    self.sla = SpeedLimitAssist(CP, CP_SP)
+    self.servo = IntelligentCruiseButtonManagement(CP, CP_SP)
+    self.ecu = FakeMazdaEcu(baseline_mph, seed=seed, hold_mode=hold_mode)
+    self.events_sp = EventsSP()
+
+    self.tick_n = 0
+    self.limit_mph = 0.
+    self.scc_dip_mph = 0.  # SCC-vision target when active, 0 = inactive
+    self.sla_states = []
+    self.driver_queue = {}  # tick -> (ButtonType, hold_ticks)
+    self._driver_active = None  # (button, remaining_ticks)
+
+    # engage: settle disabled then enabled, dash = baseline
+    for _ in range(5):
+      self._card_tick(enabled=False)
+    for _ in range(5):
+      self._card_tick(enabled=True)
+    assert abs(self.helper.v_cruise_kph - baseline_mph * MPH_KPH) < 0.1
+
+  # -- message construction ------------------------------------------------------------
+  def _cs(self, button_events=None):
+    CS = car.CarState(cruiseState={"available": True,
+                                   "speed": self.ecu.dash * MPH_MS,
+                                   "speedCluster": self.ecu.dash * MPH_MS})
+    CS.vEgo = float(self.helper.v_cruise_kph * CV.KPH_TO_MS)  # cruising at set speed; enough for these scenarios
+    CS.buttonEvents = button_events or []
+    return CS
+
+  def _lp_sp(self):
+    LP_SP = custom.LongitudinalPlanSP()
+    targets = {PlanSource.cruise: self.helper.v_cruise_kph * CV.KPH_TO_MS}
+    if self.sla.is_active and self.sla.output_v_target < 200:
+      targets[PlanSource.speedLimitAssist] = self.sla.output_v_target
+    if self.scc_dip_mph > 0:
+      targets[PlanSource.sccVision] = self.scc_dip_mph * MPH_MS
+    source = min(targets, key=lambda k: targets[k])
+    LP_SP.longitudinalPlanSource = source
+    LP_SP.vTarget = float(targets[source])
+    LP_SP.speedLimit.assist.state = self.sla.state
+    LP_SP.speedLimit.resolver.speedLimitFinalLast = self.limit_mph * MPH_MS
+    LP_SP.speedLimit.resolver.speedLimitLastValid = self.limit_mph > 0
+    return LP_SP
+
+  def _cc_sp(self):
+    CC_SP = custom.CarControlSP()
+    CC_SP.intelligentCruiseButtonManagement.state = self.servo.state
+    return CC_SP
+
+  # -- per-layer ticks -----------------------------------------------------------------
+  def _card_tick(self, enabled=True, button_events=None, lp_msg=None, cc_msg=None):
+    CS = self._cs(button_events)
+    self.helper.update_speed_limit_assist(False, lp_msg or self._lp_sp(), cc_msg or self._cc_sp())
+    self.helper.update_v_cruise(CS, enabled=enabled, is_metric=False)
+
+  def run(self, seconds, assert_each=None):
+    for _ in range(int(seconds / DT_CTRL)):
+      self.tick_n += 1
+
+      # Messages consumed this tick reflect the OTHER processes' state as of the previous
+      # tick — plannerd/selfdrived output is in flight for at least one cycle before card
+      # and each other see it. Zero-latency views would let e.g. card's press-edge
+      # ownership latch observe an SLA deactivation that, in reality, cannot have been
+      # published yet.
+      lp_msg = self._lp_sp()
+      cc_msg = self._cc_sp()
+
+      # driver script
+      events = []
+      if self.tick_n in self.driver_queue:
+        button, hold_ticks = self.driver_queue.pop(self.tick_n)
+        self._driver_active = [button, hold_ticks]
+        events.append(ButtonEvent(type=button, pressed=True))
+      driver_tap_dir = 0
+      if self._driver_active is not None:
+        button, remaining = self._driver_active
+        self._driver_active[1] -= 1
+        if self._driver_active[1] <= 0:
+          events.append(ButtonEvent(type=button, pressed=False))
+          self._driver_active = None
+          driver_tap_dir = 1 if button == ButtonType.accelCruise else -1  # ECU applies on release for short presses
+
+      # plannerd: SLA buttons at 100 Hz, state machine at 20 Hz. Sees vCruiseCluster
+      # (openpilot's own), NOT the dash.
+      self.sla.update_car_state(self._cs(events))
+      if self.tick_n % 5 == 0:
+        self.sla.update(True, False, self.helper.v_cruise_kph * CV.KPH_TO_MS, 0.,
+                        self.helper.v_cruise_cluster_kph * CV.KPH_TO_MS,
+                        self.limit_mph * MPH_MS, self.limit_mph * MPH_MS, self.limit_mph > 0,
+                        0., self.events_sp)
+        self.sla_states.append(self.sla.state)
+
+      # selfdrived: servo against the real dash
+      CC = car.CarControl(enabled=True)
+      self.servo.run(self._cs(events), CC, lp_msg, is_metric=False)
+
+      # card
+      self._card_tick(button_events=events, lp_msg=lp_msg, cc_msg=cc_msg)
+
+      # ECU: driver's physical press + openpilot's emission
+      tap_dir, hold_dir = driver_tap_dir, 0
+      sb = self.servo.cruise_button
+      if sb == SendButtonState.increase:
+        tap_dir = tap_dir or 1
+      elif sb == SendButtonState.decrease:
+        tap_dir = tap_dir or -1
+      elif sb == SendButtonState.increaseHold:
+        hold_dir = 1
+      elif sb == SendButtonState.decreaseHold:
+        hold_dir = -1
+      self.ecu.tick(tap_dir=tap_dir, hold_dir=hold_dir)
+
+      if assert_each is not None:
+        assert_each(self)
+
+  # -- driver actions ------------------------------------------------------------------
+  def driver_press(self, button, in_seconds, hold_s=0.15):
+    self.driver_queue[self.tick_n + int(in_seconds / DT_CTRL)] = (button, max(1, int(hold_s / DT_CTRL)))
+
+  @property
+  def v_cruise_mph(self):
+    return round(self.helper.v_cruise_kph / MPH_KPH, 1)
+
+
+class TestCurveRestore:
+  def test_dip_restores_exactly(self):
+    """F2 end-to-end: an SCC dip walks the dash down; after it clears, the dash comes back
+    to exactly the driver's baseline — across ECU press drops and grid snaps."""
+    loop = Loop(baseline_mph=60, seed=1)
+    loop.scc_dip_mph = 55
+    loop.run(6.0)
+    assert loop.ecu.dash <= 56, f"dash never followed the dip: {loop.ecu.dash}"
+
+    loop.scc_dip_mph = 0.
+    loop.run(12.0)  # quiet window + restore move + latency
+    assert loop.ecu.dash == 60, f"restore not exact: dash={loop.ecu.dash}"
+    assert loop.v_cruise_mph == 60, f"baseline corrupted: {loop.v_cruise_mph}"
+
+  def test_dip_train_does_not_churn(self):
+    """Back-to-back dips: the restore patience must hold the dash down between them."""
+    loop = Loop(baseline_mph=60, seed=2)
+    loop.scc_dip_mph = 55
+    loop.run(5.0)
+    dash_after_first = loop.ecu.dash
+
+    loop.scc_dip_mph = 0.
+    loop.run(1.5)  # gap shorter than the quiet window
+    assert loop.ecu.dash == dash_after_first, "servo restored between back-to-back dips"
+    loop.scc_dip_mph = 55
+    loop.run(3.0)
+    loop.scc_dip_mph = 0.
+    loop.run(12.0)
+    assert loop.ecu.dash == 60
+
+
+class TestSlaSession:
+  def _confirm_lower(self, loop, limit):
+    loop.limit_mph = limit
+    loop.run(2.0)  # disabled->preActive engagement path
+    assert loop.sla.state == SlaState.preActive, loop.sla.state
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)
+    loop.run(1.0)
+    assert loop.sla.state == SlaState.active, loop.sla.state
+
+  def test_confirm_sticks_and_dash_reaches_limit(self):
+    """F1 end-to-end: one - press confirms; SLA must stay active while ICBM walks the
+    dash all the way to the limit (hold + taps), and the baseline must survive."""
+    loop = Loop(baseline_mph=60, seed=3)
+    self._confirm_lower(loop, limit=45)
+
+    states = set()
+    def watch(lo):
+      states.add(lo.sla.state)
+    loop.run(10.0, assert_each=watch)
+    assert loop.ecu.dash == 45, f"dash never reached the limit: {loop.ecu.dash}"
+    assert states == {SlaState.active}, f"SLA flickered: {states}"
+    assert loop.v_cruise_mph == 60, f"baseline corrupted: {loop.v_cruise_mph}"
+
+  def test_settled_press_reanchors(self):
+    """Settled at the limit, one + press: SLA steps aside, the ECU's +1 becomes the new
+    setpoint, and the servo must NOT drag the dash back to the old baseline."""
+    loop = Loop(baseline_mph=60, seed=4)
+    self._confirm_lower(loop, limit=45)
+    loop.run(10.0)
+    assert loop.ecu.dash == 45
+
+    loop.driver_press(ButtonType.accelCruise, in_seconds=0.1)
+    loop.run(5.0)
+    assert loop.sla.state == SlaState.inactive, loop.sla.state
+    assert loop.ecu.dash == 46, f"dash: {loop.ecu.dash}"
+    assert round(loop.v_cruise_mph) == 46, f"setpoint must re-anchor to 46: {loop.v_cruise_mph}"
+
+  def test_mid_move_abort_restores_baseline(self):
+    """+ while ICBM is still walking down: session aborts and the servo restores the
+    exact baseline — the driver is never stranded mid-way (the upstream failure mode)."""
+    loop = Loop(baseline_mph=60, seed=5)
+    self._confirm_lower(loop, limit=45)
+
+    loop.run(1.2)  # servo mid-move, dash somewhere between 60 and 45
+    assert 45 < loop.ecu.dash < 60, loop.ecu.dash
+    loop.driver_press(ButtonType.accelCruise, in_seconds=0.05)
+    loop.run(14.0)  # abort + quiet window + restore
+    assert loop.sla.state == SlaState.inactive
+    assert loop.ecu.dash == 60, f"baseline not restored: {loop.ecu.dash}"
+    assert loop.v_cruise_mph == 60, f"setpoint corrupted: {loop.v_cruise_mph}"
+
+  def test_holds_read_as_taps_still_reaches_limit(self):
+    """An ECU that registers synthesized holds as paced presses: same net progress as
+    taps, no fault needed — the session still lands the limit."""
+    loop = Loop(baseline_mph=60, seed=6, hold_mode='taps')
+    self._confirm_lower(loop, limit=45)
+
+    loop.run(15.0)
+    assert loop.ecu.dash == 45, f"dash never landed: {loop.ecu.dash}"
+    assert loop.sla.state == SlaState.active
+
+  def test_holds_ignored_faults_and_taps_land(self):
+    """An ECU that rejects synthesized holds outright: zero movement must trip the
+    long-press fallback, and the session still lands the limit on taps."""
+    loop = Loop(baseline_mph=60, seed=7, hold_mode='ignored')
+    self._confirm_lower(loop, limit=45)
+
+    loop.run(15.0)
+    assert loop.servo.longpress_faulted
+    assert loop.ecu.dash == 45, f"taps fallback never landed: {loop.ecu.dash}"
+    assert loop.sla.state == SlaState.active
