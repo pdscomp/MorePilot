@@ -16,8 +16,9 @@ from opendbc.car.structs import car
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.selfdrive.car.cruise import VCruiseHelper, IMPERIAL_INCREMENT
+from openpilot.common.realtime import DT_CTRL
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.controller import (
-  IntelligentCruiseButtonManagement, REACT_DEADBAND)
+  IntelligentCruiseButtonManagement, REACT_DEADBAND, RESTORE_QUIET_TIME)
 
 ButtonEvent = car.CarState.ButtonEvent
 ButtonType = car.CarState.ButtonEvent.Type
@@ -168,37 +169,43 @@ class TestSetpointReconcile:
     assert self.v_cruise_helper.v_cruise_kph < 60.
 
 
-class TestIcbmDeadband:
-  def setup_method(self):
-    self.CP = car.CarParams(pcmCruise=True)
-    self.CP_SP = custom.CarParamsSP(pcmCruiseSpeed=False)
-    self.icbm = IntelligentCruiseButtonManagement(self.CP, self.CP_SP)
+class TestServo:
+  """ButtonActuator servo: limiter-scoped deadband, fast decisive down-moves, patient
+  exact restores, hold planning from the per-car profile, tap fallback."""
 
-  def run_frames(self, target_mph, cluster_mph, n=1):
+  def make_icbm(self, brand=""):
+    return IntelligentCruiseButtonManagement(car.CarParams(pcmCruise=True, brand=brand),
+                                             custom.CarParamsSP(pcmCruiseSpeed=False))
+
+  def setup_method(self):
+    self.icbm = self.make_icbm()
+
+  def run_frames(self, target_mph, cluster_mph, n=1, source='sccVision', icbm=None, is_metric=False):
+    icbm = icbm or self.icbm
     sends = []
     for _ in range(n):
       CS = car.CarState(cruiseState={"speedCluster": cluster_mph * CV.MPH_TO_MS})
       CC = car.CarControl(enabled=True)
       LP_SP = custom.LongitudinalPlanSP(vTarget=target_mph * CV.MPH_TO_MS)
-      self.icbm.run(CS, CC, LP_SP, is_metric=False)
-      sends.append(self.icbm.cruise_button)
+      LP_SP.longitudinalPlanSource = source
+      icbm.run(CS, CC, LP_SP, is_metric=is_metric)
+      sends.append(icbm.cruise_button)
     return sends
 
-  def test_within_deadband_no_send(self):
-    # settle into holding at equality first
+  def test_limiter_jitter_within_deadband_no_send(self):
     self.run_frames(35, 35, n=60)
     assert self.icbm.state == State.holding
 
-    sends = self.run_frames(35 + REACT_DEADBAND - 1, 35, n=100)
+    sends = self.run_frames(35 - (REACT_DEADBAND - 1), 35, n=100)
     assert self.icbm.state == State.holding
     assert all(s == SendButtonState.none for s in sends)
 
-  def test_beyond_deadband_sends(self):
+  def test_limiter_down_move_beyond_deadband(self):
     self.run_frames(35, 35, n=60)
 
-    sends = self.run_frames(35 + REACT_DEADBAND, 35, n=100)
-    assert self.icbm.state == State.increasing
-    assert any(s == SendButtonState.increase for s in sends)
+    sends = self.run_frames(35 - REACT_DEADBAND, 35, n=100)
+    assert self.icbm.state == State.decreasing
+    assert any(s == SendButtonState.decrease for s in sends)
 
   def test_transient_glitch_filtered(self):
     """A short-lived target drop (e.g. one bad map sample) must not trigger buttons."""
@@ -220,6 +227,84 @@ class TestIcbmDeadband:
         cluster -= 1  # dash responds ~1 mph per press
     assert cluster == 35.
     assert self.icbm.state == State.holding
+
+  def test_restore_waits_for_quiet_target(self):
+    """After a limiter dip ends, the restore up must wait out RESTORE_QUIET_TIME — curves
+    arrive in trains, and some ECUs won't decel while the set speed is moving."""
+    self.run_frames(55, 55, n=60)
+    assert self.icbm.state == State.holding
+
+    # target back at the driver's 60; less than the quiet time elapsed -> no buttons yet
+    sends = self.run_frames(60, 55, n=int(RESTORE_QUIET_TIME / DT_CTRL) - 50, source='cruise')
+    assert all(s == SendButtonState.none for s in sends)
+    assert self.icbm.state == State.holding
+
+    # quiet time satisfied -> restore fires and runs
+    self.run_frames(60, 55, n=100, source='cruise')
+    assert self.icbm.state == State.increasing
+
+  def test_restore_is_exact_to_one_unit(self):
+    """The F2 ratchet: a 1 mph residual against the driver setpoint must self-heal (no
+    deadband against a cruise-source target)."""
+    self.run_frames(59, 59, n=60, source='cruise')
+    assert self.icbm.state == State.holding
+
+    self.run_frames(60, 59, n=int(RESTORE_QUIET_TIME / DT_CTRL) + 100, source='cruise')
+    assert self.icbm.state == State.increasing
+
+  def test_moving_target_resets_restore_quiet(self):
+    """An up-target that keeps moving (another dip building) never triggers a restore."""
+    self.run_frames(55, 55, n=60)
+    for _ in range(4):
+      self.run_frames(60, 55, n=100, source='cruise')
+      self.run_frames(59, 55, n=100, source='cruise')
+    assert self.icbm.state == State.holding
+
+  def test_hold_planned_for_coarse_moves(self):
+    """Mazda profile, imperial: a move spanning >= one snap step starts as a hold, drops
+    to taps for the remainder, and lands exactly."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(60, 60, n=60, icbm=icbm)
+
+    self.run_frames(45, 60, n=60, icbm=icbm)
+    assert icbm.state == State.decreasing
+    assert icbm.cruise_button == SendButtonState.decreaseHold
+
+    # ECU snaps 60 -> 55 -> 50; remaining 5 still holds, at 49 the remainder is taps
+    self.run_frames(45, 50, n=5, icbm=icbm)
+    assert icbm.cruise_button == SendButtonState.decreaseHold
+    self.run_frames(45, 49, n=5, icbm=icbm)
+    assert icbm.cruise_button == SendButtonState.decrease
+
+    self.run_frames(45, 45, n=5, icbm=icbm)
+    assert icbm.state == State.holding
+
+  def test_hold_falls_back_to_taps_when_dash_frozen(self):
+    """If a synthesized hold never lands a step, long-press is disabled for the drive."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(60, 60, n=60, icbm=icbm)
+
+    self.run_frames(45, 60, n=60, icbm=icbm)
+    assert icbm.cruise_button == SendButtonState.decreaseHold
+
+    # dash frozen past first_step + margin -> fault and tap from here on
+    self.run_frames(45, 60, n=150, icbm=icbm)
+    assert icbm.longpress_faulted
+    assert icbm.cruise_button == SendButtonState.decrease
+
+    # a later coarse move stays taps-only
+    self.run_frames(60, 60, n=200, icbm=icbm)
+    self.run_frames(40, 60, n=60, icbm=icbm)
+    assert icbm.cruise_button == SendButtonState.decrease
+
+  def test_metric_plans_taps_only(self):
+    """The Mazda long-press grid is only characterized in mph; metric must not hold."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(60, 60, n=60, icbm=icbm, is_metric=True)
+
+    self.run_frames(45, 60, n=60, icbm=icbm, is_metric=True)
+    assert icbm.state == State.decreasing
+    assert icbm.cruise_button == SendButtonState.decrease
 
 
 class TestDecelOvershoot:
