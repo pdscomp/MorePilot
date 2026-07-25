@@ -93,7 +93,7 @@ class TestSetpointReconcile:
     assert abs(self.v_cruise_helper.v_cruise_kph - 40 * MPH) < 0.5
 
   def test_no_adoption_while_scc_limited(self):
-    """When a limiter drives the plan, the dash is held away from v_cruise by design —
+    """When a limiter drives the plan, the dash is held away from v_cruise by design;
     a press must increment v_cruise, never adopt the limiter-held dash."""
     self.engage_at(45 * MPH)
     self.set_regime(source='sccVision')
@@ -126,7 +126,7 @@ class TestSetpointReconcile:
 
   def test_sla_settled_press_reanchors_to_dash(self):
     """Settled at a limit, a + press deactivates SLA (plannerd side) and the setpoint
-    re-anchors to the ECU's dash response — stock button feel."""
+    re-anchors to the ECU's dash response: stock button feel."""
     self.engage_at(60 * MPH)
     self.set_regime(source='speedLimitAssist', sla_state='active', limit_kph=45 * MPH)
     self.run_frames(make_car_state(dash_kph=45 * MPH), n=110)
@@ -135,7 +135,7 @@ class TestSetpointReconcile:
     # press lands while SLA is still active: no increment (owned by SLA)
     self.press(ButtonType.accelCruise, dash_kph=45 * MPH)
     # SLA deactivates on the press, plan source returns to cruise, servo is idle;
-    # the ECU stepped the dash to 46 — adopt it inside the settle window
+    # the ECU stepped the dash to 46; adopt it inside the settle window
     self.set_regime(source='cruise', icbm_state='holding', sla_state='inactive')
     self.run_frames(make_car_state(dash_kph=46 * MPH), n=20)
     assert abs(self.v_cruise_helper.v_cruise_kph - 46 * MPH) < 0.5
@@ -148,7 +148,7 @@ class TestSetpointReconcile:
 
     # servo is halfway down (dash 52) when the driver presses +
     self.press(ButtonType.accelCruise, dash_kph=52 * MPH)
-    # SLA deactivates; servo restores (increasing) — dash still low during the settle window
+    # SLA deactivates; servo restores (increasing); dash still low during the settle window
     self.set_regime(source='cruise', icbm_state='increasing', sla_state='inactive')
     self.run_frames(make_car_state(dash_kph=53 * MPH), n=20)
     assert abs(self.v_cruise_helper.v_cruise_kph - 60 * MPH) < 0.1
@@ -230,7 +230,7 @@ class TestServo:
 
   def test_restore_waits_for_quiet_target(self):
     """After a limiter dip ends, the restore up must wait out RESTORE_QUIET_TIME on cars
-    whose profile declares decel_needs_stable_setpoint — curves arrive in trains, and
+    whose profile declares decel_needs_stable_setpoint: curves arrive in trains, and
     these ECUs won't decel while the set speed is moving."""
     icbm = self.make_icbm(brand="mazda")
     self.run_frames(55, 55, n=60, icbm=icbm)
@@ -246,7 +246,7 @@ class TestServo:
     assert icbm.state == State.increasing
 
   def test_default_profile_restores_without_patience(self):
-    """Cars without decel_needs_stable_setpoint keep their fast restores — the quiet
+    """Cars without decel_needs_stable_setpoint keep their fast restores; the quiet
     window is per-car behavior, not a global regression."""
     self.run_frames(55, 55, n=60)
     assert self.icbm.state == State.holding

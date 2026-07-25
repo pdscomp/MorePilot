@@ -9,9 +9,9 @@ Closed-loop integration tests for the ICBM + SLA + driver-setpoint stack.
 Unit tests validate each layer alone; the bugs this stack has actually shipped were all
 INTERACTIONS: the confirm press tearing down its own session through the cluster guard,
 the deadband stranding the restore the servo itself created, the dash re-sync adopting a
-limiter-held dash. So this harness wires the real production classes together —
-VCruiseHelper (card), SpeedLimitAssist (plannerd, 20 Hz), the ICBM servo (selfdrived) —
-against a simulated Mazda body ECU with the measured imperfections:
+limiter-held dash. So this harness wires the real production classes together
+(VCruiseHelper in card, SpeedLimitAssist in plannerd at 20 Hz, the ICBM servo in
+selfdrived) against a simulated Mazda body ECU with the measured imperfections:
 
 - taps register at most every 200 ms, and ~7% are dropped (seeded, deterministic)
 - a sustained hold snaps to the next 5 mph multiple after ~0.6 s, then every ~0.55 s,
@@ -58,9 +58,9 @@ class FakeMazdaEcu:
 
   hold_mode models the open question of how a real ECU integrates SYNTHESIZED holds
   (forged button-down frames interleaved with the wheel's genuine button-up frames):
-    'snap'    — integrates them like a physical hold: 5 mph grid steps (best case)
-    'taps'    — registers them as paced discrete presses: same net progress as taps
-    'ignored' — rejects them outright: zero movement (worst case; must trip the fallback)
+    'snap':    integrates them like a physical hold: 5 mph grid steps (best case)
+    'taps':    registers them as paced discrete presses: same net progress as taps
+    'ignored': rejects them outright: zero movement (worst case; must trip the fallback)
   """
 
   def __init__(self, dash_mph, seed=0, hold_mode='snap'):
@@ -193,7 +193,7 @@ class Loop:
       self.tick_n += 1
 
       # Messages consumed this tick reflect the OTHER processes' state as of the previous
-      # tick — plannerd/selfdrived output is in flight for at least one cycle before card
+      # tick: plannerd/selfdrived output is in flight for at least one cycle before card
       # and each other see it. Zero-latency views would let e.g. card's press-edge
       # ownership latch observe an SLA deactivation that, in reality, cannot have been
       # published yet.
@@ -267,7 +267,7 @@ class Loop:
 class TestCurveRestore:
   def test_dip_restores_exactly(self):
     """F2 end-to-end: an SCC dip walks the dash down; after it clears, the dash comes back
-    to exactly the driver's baseline — across ECU press drops and grid snaps."""
+    to exactly the driver's baseline, across ECU press drops and grid snaps."""
     loop = Loop(baseline_mph=60, seed=1)
     loop.scc_dip_mph = 55
     loop.run(6.0)
@@ -334,7 +334,7 @@ class TestSlaSession:
 
   def test_mid_move_abort_restores_baseline(self):
     """+ while ICBM is still walking down: session aborts and the servo restores the
-    exact baseline — the driver is never stranded mid-way (the upstream failure mode)."""
+    exact baseline; the driver is never stranded mid-way (the upstream failure mode)."""
     loop = Loop(baseline_mph=60, seed=5)
     self._confirm_lower(loop, limit=45)
 
@@ -348,7 +348,7 @@ class TestSlaSession:
 
   def test_holds_read_as_taps_still_reaches_limit(self):
     """An ECU that registers synthesized holds as paced presses: same net progress as
-    taps, no fault needed — the session still lands the limit."""
+    taps and no fault needed; the session still lands the limit."""
     loop = Loop(baseline_mph=60, seed=6, hold_mode='taps')
     self._confirm_lower(loop, limit=45)
 
@@ -371,7 +371,7 @@ class TestSlaSession:
 class TestPressTimingSweeps:
   """Every shipped bug in this stack was a single driver press racing the 20 Hz SLA
   cycle, the reconcile window, or the servo state. These sweeps land the same press at
-  offsets spanning more than one full SLA cycle and assert the outcome INVARIANTS —
+  offsets spanning more than one full SLA cycle and assert the outcome INVARIANTS:
   the system must converge to one coherent state at every phase, never a hybrid."""
 
   OFFSETS_S = (0.0, 0.03, 0.07, 0.11, 0.16, 0.21)
@@ -400,7 +400,7 @@ class TestPressTimingSweeps:
   def test_mid_move_press_at_any_phase_converges(self):
     """Abort mid-walk at every phase. Deep in the walk the baseline must survive and
     restore exactly; within the ±2 mph agreement band of the limit the press counts as
-    settled and re-anchors — either way the system converges (setpoint == dash) and the
+    settled and re-anchors; either way the system converges (setpoint == dash) and the
     baseline is never left corrupted at some in-between value."""
     for offset in self.OFFSETS_S:
       loop = Loop(baseline_mph=60, seed=11)
@@ -427,7 +427,7 @@ class TestDriverInteractions:
     """The most common real exit from a zone: settled at the limit, the driver HOLDS +
     to climb. The ECU snaps along its 5 mph grid (possibly with a trailing step), the
     increments stay suppressed (SLA owned the press), and the setpoint re-anchors to
-    wherever the ECU landed — with no servo fight afterward."""
+    wherever the ECU landed, with no servo fight afterward."""
     loop = Loop(baseline_mph=60, seed=12)
     loop.limit_mph = 45
     loop.run(2.0)
