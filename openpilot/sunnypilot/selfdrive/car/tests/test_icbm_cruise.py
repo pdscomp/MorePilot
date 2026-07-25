@@ -229,18 +229,29 @@ class TestServo:
     assert self.icbm.state == State.holding
 
   def test_restore_waits_for_quiet_target(self):
-    """After a limiter dip ends, the restore up must wait out RESTORE_QUIET_TIME — curves
-    arrive in trains, and some ECUs won't decel while the set speed is moving."""
+    """After a limiter dip ends, the restore up must wait out RESTORE_QUIET_TIME on cars
+    whose profile declares decel_needs_stable_setpoint — curves arrive in trains, and
+    these ECUs won't decel while the set speed is moving."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(55, 55, n=60, icbm=icbm)
+    assert icbm.state == State.holding
+
+    # target back at the driver's 60; less than the quiet time elapsed -> no buttons yet
+    sends = self.run_frames(60, 55, n=int(RESTORE_QUIET_TIME / DT_CTRL) - 50, source='cruise', icbm=icbm)
+    assert all(s == SendButtonState.none for s in sends)
+    assert icbm.state == State.holding
+
+    # quiet time satisfied -> restore fires and runs
+    self.run_frames(60, 55, n=100, source='cruise', icbm=icbm)
+    assert icbm.state == State.increasing
+
+  def test_default_profile_restores_without_patience(self):
+    """Cars without decel_needs_stable_setpoint keep their fast restores — the quiet
+    window is per-car behavior, not a global regression."""
     self.run_frames(55, 55, n=60)
     assert self.icbm.state == State.holding
 
-    # target back at the driver's 60; less than the quiet time elapsed -> no buttons yet
-    sends = self.run_frames(60, 55, n=int(RESTORE_QUIET_TIME / DT_CTRL) - 50, source='cruise')
-    assert all(s == SendButtonState.none for s in sends)
-    assert self.icbm.state == State.holding
-
-    # quiet time satisfied -> restore fires and runs
-    self.run_frames(60, 55, n=100, source='cruise')
+    self.run_frames(60, 55, n=60, source='cruise')
     assert self.icbm.state == State.increasing
 
   def test_restore_is_exact_to_one_unit(self):
@@ -254,11 +265,12 @@ class TestServo:
 
   def test_moving_target_resets_restore_quiet(self):
     """An up-target that keeps moving (another dip building) never triggers a restore."""
-    self.run_frames(55, 55, n=60)
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(55, 55, n=60, icbm=icbm)
     for _ in range(4):
-      self.run_frames(60, 55, n=100, source='cruise')
-      self.run_frames(59, 55, n=100, source='cruise')
-    assert self.icbm.state == State.holding
+      self.run_frames(60, 55, n=100, source='cruise', icbm=icbm)
+      self.run_frames(59, 55, n=100, source='cruise', icbm=icbm)
+    assert icbm.state == State.holding
 
   def test_hold_planned_for_coarse_moves(self):
     """Mazda profile, imperial: a move spanning >= one snap step starts as a hold, drops

@@ -111,14 +111,14 @@ class FakeMazdaEcu:
         self.pending.append((self.t + TAP_LATENCY_S, 5 * self.hold_dir))
       self.hold_dir, self.hold_t, self.hold_steps = 0, 0., 0
 
-    for apply_t, delta in [p for p in self.pending]:
-      if self.t >= apply_t:
-        self.pending.remove((apply_t, delta))
-        if delta == 'snap':
-          self.dash += self._snap(1 if self.hold_dir >= 0 else -1) if self.hold_dir else 0
-        else:
-          self.dash += delta
-        self.dash = max(20, min(90, self.dash))
+    due = [d for at, d in self.pending if self.t >= at]
+    self.pending = [(at, d) for at, d in self.pending if self.t < at]
+    for delta in due:
+      if delta == 'snap':
+        self.dash += self._snap(1 if self.hold_dir >= 0 else -1) if self.hold_dir else 0
+      else:
+        self.dash += delta
+      self.dash = max(20, min(90, self.dash))
     return self.dash
 
 
@@ -143,7 +143,6 @@ class Loop:
     self.tick_n = 0
     self.limit_mph = 0.
     self.scc_dip_mph = 0.  # SCC-vision target when active, 0 = inactive
-    self.sla_states = []
     self.driver_queue = {}  # tick -> (ButtonType, hold_ticks)
     self._driver_active = None  # (button, remaining_ticks)
 
@@ -184,8 +183,8 @@ class Loop:
     return CC_SP
 
   # -- per-layer ticks -----------------------------------------------------------------
-  def _card_tick(self, enabled=True, button_events=None, lp_msg=None, cc_msg=None):
-    CS = self._cs(button_events)
+  def _card_tick(self, CS=None, enabled=True, lp_msg=None, cc_msg=None):
+    CS = CS if CS is not None else self._cs()
     self.helper.update_speed_limit_assist(False, lp_msg or self._lp_sp(), cc_msg or self._cc_sp())
     self.helper.update_v_cruise(CS, enabled=enabled, is_metric=False)
 
@@ -216,22 +215,24 @@ class Loop:
           self._driver_active = None
           driver_tap_dir = 1 if button == ButtonType.accelCruise else -1  # ECU applies on release for short presses
 
+      # one CarState per tick, shared by all three consumers (none mutates it)
+      CS = self._cs(events)
+
       # plannerd: SLA buttons at 100 Hz, state machine at 20 Hz. Sees vCruiseCluster
       # (openpilot's own), NOT the dash.
-      self.sla.update_car_state(self._cs(events))
+      self.sla.update_car_state(CS)
       if self.tick_n % 5 == 0:
         self.sla.update(True, False, self.helper.v_cruise_kph * CV.KPH_TO_MS, 0.,
                         self.helper.v_cruise_cluster_kph * CV.KPH_TO_MS,
                         self.limit_mph * MPH_MS, self.limit_mph * MPH_MS, self.limit_mph > 0,
                         0., self.events_sp)
-        self.sla_states.append(self.sla.state)
 
       # selfdrived: servo against the real dash
       CC = car.CarControl(enabled=True)
-      self.servo.run(self._cs(events), CC, lp_msg, is_metric=False)
+      self.servo.run(CS, CC, lp_msg, is_metric=False)
 
       # card
-      self._card_tick(button_events=events, lp_msg=lp_msg, cc_msg=cc_msg)
+      self._card_tick(CS, lp_msg=lp_msg, cc_msg=cc_msg)
 
       # ECU: driver's physical press + openpilot's emission
       tap_dir, hold_dir = driver_tap_dir, 0
