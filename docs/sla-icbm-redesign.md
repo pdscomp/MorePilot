@@ -430,3 +430,52 @@ Scripts in `tools/mazda_long/icbm_sla/` (run from repo root, venv active):
 
 Corpus data: `tools/mazda_long/test_data/` (674 CX-5 2022 segments, gitignored). Connect auth:
 `~/.comma/auth.json`; `LogReader("952c07dea500f4e2/000000c9--0850e1c117/32")`.
+
+---
+
+## 7. Cruise arbiter refactor (2026-07-26) — intents + published session
+
+Status: IMPLEMENTED on mazda-dev (`9da6aad967` schema, `96e2e995c6` arbiter, `80f14eebd5`
+servo freeze), replacing the §4 guard-based design's *mechanics* while keeping its locked
+semantics. Motivation: every first-drive bug (see `tools/mazda_long/icbm_sla/
+replay_drive_incidents.py`) traced to three structural weaknesses:
+
+1. Four modules independently interpreted the same +/- press (increment path, ownership
+   latch, confirm/dismiss latches in plannerd, servo pause), bridged by 0.5 s wall-clock
+   latches sized to the 20 Hz plannerd machine two processes from the buttons.
+2. Intent traveled as a single number through the planner `min()`: SLA could not say
+   "raise the setpoint" (up-confirm inert) or "hold, decision pending" (the preActive
+   plan-target fake), and the servo's effective command was invisible.
+3. The session existed nowhere as a datum: it was smeared across sla_state (plannerd),
+   v_cruise (card), icbm_state (selfdrived), and the reconcile window.
+
+As-built:
+
+- **`cruise_arbiter.py` (card, 100 Hz)** — single owner of button meaning and the SLA
+  session, in the same frame as the buttons and the setpoint writer. Classification at
+  press edges: dismiss (press on an active session, owned), confirm/decline (release of
+  a press that started AND released during a prompt; long presses resolve at the first
+  repeat tick), increment/decrement otherwise. Timers are DT_CTRL frame counts; no
+  `time.monotonic()` anywhere, so log replays are deterministic.
+- **`carStateSP.cruiseSession`** — state, vCap (active target / frozen prompt hold),
+  lastIntent, transitionCounter, announceCounter. Counters make 100 Hz transitions
+  visible to 20 Hz consumers: the plannerd mirror (`assist_mirror.py`) republishes the
+  old `speedLimit.assist` wire format (UI untouched) and fires `speedLimitActive` on
+  announce deltas, `speedLimitPreActive` on level.
+- **Prompt freeze, three layers**: the session's vCap holds the old target through the
+  prompt (plan min unchanged), the servo parks (`prompt_frozen`, restore patience held
+  at zero so decline/timeout waits a FULL quiet window), and card vetoes
+  `sendButton` with same-frame state before `CI.apply` (the servo's own gate is one
+  message hop stale). Found while testing: the servo's preActive entry path bypassed
+  the quiet window entirely after any driver press (the t≈393 dash-slam) — gated now.
+- **pcm-op-long unchanged**: `speed_limit_assist.py` keeps only that machine.
+
+Deliberate deviation from §4.5's locked "min(setpoint, limit)": an upward confirm ADOPTS
+the limit into the setpoint (`max(v_cruise, target)`, never lowering it) — owner decision
+2026-07-26 after the first drive showed min() semantics make `+` do nothing when the
+setpoint is at or below the old limit.
+
+Validation: 45 loop-harness scenarios (transport delays and the dash-vs-cluster split
+retained), arbiter unit tests, seg16 F1 replay, and the drive-0b incident replay all
+green. Future upstream note: the reconcile settle-window mechanics still key on raw
+press timers; expressing them fully in intents is cosmetic and left for the upstream PR.
