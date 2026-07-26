@@ -2,13 +2,10 @@
 # legacy URLs.
 [submodule "panda"]
   path = panda
-  url = https://github.com/sunnyhaibin/panda.git
+  url = https://github.com/pdscomp/panda.git
 [submodule "opendbc"]
   path = opendbc_repo
-  url = https://github.com/zoompilot/opendbc.git
-[submodule "jetlink"]
-  path = jetlink_repo
-  url = https://github.com/zoompilot/jetlink.git
+  url = https://github.com/pdscomp/opendbc.git
 [submodule "msgq"]
   path = msgq_repo
   url = https://github.com/sunnypilot/msgq.git
@@ -24,4 +21,6 @@
 [submodule "sunnypilot/neural_network_data"]
 	path = openpilot/sunnypilot/neural_network_data
   url = https://github.com/sunnypilot/neural-network-data.git
-
+[submodule "jetlink"]
+  path = jetlink_repo
+  url = https://github.com/zoompilot/jetlink.git
