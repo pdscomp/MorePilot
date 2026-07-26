@@ -458,7 +458,7 @@ As-built:
   repeat tick), increment/decrement otherwise. Timers are DT_CTRL frame counts; no
   `time.monotonic()` anywhere, so log replays are deterministic.
 - **`carStateSP.cruiseSession`** — state, vCap (active target / frozen prompt hold),
-  lastIntent, transitionCounter, announceCounter. Counters make 100 Hz transitions
+  lastIntent, announceCounter. The counter makes 100 Hz alert-worthy transitions
   visible to 20 Hz consumers: the plannerd mirror (`assist_mirror.py`) republishes the
   old `speedLimit.assist` wire format (UI untouched) and fires `speedLimitActive` on
   announce deltas, `speedLimitPreActive` on level.
