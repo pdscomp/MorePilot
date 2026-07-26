@@ -49,11 +49,18 @@ class TestSetpointReconcile:
     LP_SP = custom.LongitudinalPlanSP()
     LP_SP.longitudinalPlanSource = source
     LP_SP.speedLimit.assist.state = sla_state
+    LP_SP.speedLimit.resolver.speedLimit = limit_kph * CV.KPH_TO_MS
     LP_SP.speedLimit.resolver.speedLimitFinalLast = limit_kph * CV.KPH_TO_MS
     LP_SP.speedLimit.resolver.speedLimitLastValid = limit_kph > 0
     CC_SP = custom.CarControlSP()
     CC_SP.intelligentCruiseButtonManagement.state = icbm_state
     self.v_cruise_helper.update_speed_limit_assist(False, LP_SP, CC_SP)
+    # the arbiter owns the session now: an "SLA active" regime is arbiter state, not
+    # a longitudinalPlanSP echo
+    arb = self.v_cruise_helper.cruise_arbiter
+    arb.enabled = True
+    arb.state = getattr(custom.LongitudinalPlanSP.SpeedLimit.AssistState, sla_state)
+    arb._speed_limit_prev = arb._speed_limit  # regime setup is not a limit-change edge
 
   def run_frames(self, CS, n=1, enabled=True):
     for _ in range(n):

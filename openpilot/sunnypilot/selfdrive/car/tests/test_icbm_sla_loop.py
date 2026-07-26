@@ -32,8 +32,8 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.car.cruise import VCruiseHelper
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.controller import IntelligentCruiseButtonManagement
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.assist_mirror import SpeedLimitAssistMirror
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 
 ButtonEvent = car.CarState.ButtonEvent
@@ -124,7 +124,14 @@ class FakeMazdaEcu:
 
 
 class Loop:
-  """100 Hz co-simulation of card + plannerd (20 Hz) + selfdrived + the fake ECU."""
+  """100 Hz co-simulation of card (arbiter inside) + plannerd mirror (20 Hz) +
+  selfdrived + the fake ECU.
+
+  The SLA session machine now runs inside card's VCruiseHelper (the cruise arbiter),
+  synchronous with the buttons: that hop has genuinely zero latency in production, so
+  the harness models it that way. The plannerd->card (longitudinalPlanSP) and
+  selfdrived->card (carControlSP) hops keep their one-cycle transport delay, and the
+  mirror consumes the session snapshot from the previous frame, as plannerd would."""
 
   def __init__(self, baseline_mph=60, seed=0, hold_mode='snap'):
     params = Params()
@@ -136,7 +143,8 @@ class Loop:
     CP = car.CarParams(pcmCruise=True, brand="mazda")
     CP_SP = custom.CarParamsSP(pcmCruiseSpeed=False)
     self.helper = VCruiseHelper(CP, CP_SP)
-    self.sla = SpeedLimitAssist(CP, CP_SP)
+    self.sla = self.helper.cruise_arbiter  # 100 Hz session truth; .state as before
+    self.mirror = SpeedLimitAssistMirror(CP, CP_SP)  # plannerd side: plan cap + events
     self.servo = IntelligentCruiseButtonManagement(CP, CP_SP)
     self.ecu = FakeMazdaEcu(baseline_mph, seed=seed, hold_mode=hold_mode)
     self.events_sp = EventsSP()
@@ -166,16 +174,17 @@ class Loop:
 
   def _lp_sp(self):
     LP_SP = custom.LongitudinalPlanSP()
-    # mirror longitudinal_planner.update_targets: SLA's output always participates
-    # (V_CRUISE_UNSET when idle never wins the min; the preActive hold does)
+    # as longitudinal_planner.update_targets: the mirror's cap always participates
+    # (V_CRUISE_UNSET when idle never wins the min; the frozen prompt hold does)
     targets = {PlanSource.cruise: self.helper.v_cruise_kph * CV.KPH_TO_MS,
-               PlanSource.speedLimitAssist: self.sla.output_v_target}
+               PlanSource.speedLimitAssist: self.mirror.output_v_target}
     if self.scc_dip_mph > 0:
       targets[PlanSource.sccVision] = self.scc_dip_mph * MPH_MS
     source = min(targets, key=lambda k: targets[k])
     LP_SP.longitudinalPlanSource = source
     LP_SP.vTarget = float(targets[source])
-    LP_SP.speedLimit.assist.state = self.sla.state
+    LP_SP.speedLimit.assist.state = self.mirror.state
+    LP_SP.speedLimit.resolver.speedLimit = self.limit_mph * MPH_MS
     LP_SP.speedLimit.resolver.speedLimitFinalLast = self.limit_mph * MPH_MS
     LP_SP.speedLimit.resolver.speedLimitLastValid = self.limit_mph > 0
     return LP_SP
@@ -226,22 +235,21 @@ class Loop:
       # one CarState per tick, shared by all three consumers (none mutates it)
       CS = self._cs(events)
 
-      # plannerd: SLA buttons at 100 Hz, state machine at 20 Hz. Sees vCruiseCluster
-      # (openpilot's own), NOT the dash.
-      self.sla.update_car_state(CS)
+      # plannerd: mirrors the session as published at the END of the previous card
+      # frame (one transport hop), at 20 Hz
       if self.tick_n % 5 == 0:
+        session_msg = custom.CarStateSP.new_message()
+        self.helper.cruise_arbiter.fill_msg(session_msg)
         self.events_sp.clear()
-        self.sla.update(True, False, self.helper.v_cruise_kph * CV.KPH_TO_MS, 0.,
-                        self.helper.v_cruise_cluster_kph * CV.KPH_TO_MS,
-                        self.limit_mph * MPH_MS, self.limit_mph * MPH_MS, self.limit_mph > 0,
-                        0., self.events_sp)
+        self.mirror.update(session_msg.cruiseSession, 0., self.events_sp)
         self.sla_events.extend((self.tick_n, e) for e in self.events_sp.events)
 
       # selfdrived: servo against the real dash
       CC = car.CarControl(enabled=True)
       self.servo.run(CS, CC, lp_msg, is_metric=False)
 
-      # card
+      # card: arbiter (classification + session) runs inside update_v_cruise,
+      # synchronous with the buttons
       self._card_tick(CS, lp_msg=lp_msg, cc_msg=cc_msg)
 
       # ECU: driver's physical press + openpilot's emission
