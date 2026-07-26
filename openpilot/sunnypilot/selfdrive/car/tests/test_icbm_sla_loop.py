@@ -244,17 +244,23 @@ class Loop:
         self.mirror.update(session_msg.cruiseSession, 0., self.events_sp)
         self.sla_events.extend((self.tick_n, e) for e in self.events_sp.events)
 
-      # selfdrived: servo against the real dash
+      # selfdrived: servo against the real dash; the session state it sees is one
+      # message hop old (carStateSP published at the end of the previous card frame)
+      session_state_stale = self.helper.cruise_arbiter.state
       CC = car.CarControl(enabled=True)
-      self.servo.run(CS, CC, lp_msg, is_metric=False)
+      self.servo.run(CS, CC, lp_msg, is_metric=False, session_state=session_state_stale)
 
       # card: arbiter (classification + session) runs inside update_v_cruise,
       # synchronous with the buttons
       self._card_tick(CS, lp_msg=lp_msg, cc_msg=cc_msg)
 
-      # ECU: driver's physical press + openpilot's emission
+      # ECU: driver's physical press + openpilot's emission. Card vetoes emission with
+      # same-frame session state (the servo's own freeze is one hop stale), as
+      # card.controls_update does before CI.apply.
       tap_dir, hold_dir = driver_tap_dir, driver_hold_dir
       sb = self.servo.cruise_button
+      if self.helper.cruise_arbiter.prompting:
+        sb = SendButtonState.none
       if sb == SendButtonState.increase:
         tap_dir = tap_dir or 1
       elif sb == SendButtonState.decrease:
@@ -567,6 +573,49 @@ class TestDriverInteractions:
     assert states == {SlaState.active}, f"activation did not stick: {states}"
     assert not any(e == EventNameSP.speedLimitActive for _, e in loop.sla_events), \
       "dial-to-target activation must be silent"
+
+  def test_decline_waits_full_quiet_window_before_restore(self):
+    """The prompt must not pre-pay the servo's patience: after a decline, the restore
+    toward the (incremented) baseline starts only after a FULL quiet window, giving
+    card time to settle the decline press's own effects first."""
+    loop = Loop(baseline_mph=48, seed=27)
+    loop.limit_mph = 40
+    loop.run(2.0)
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)
+    loop.run(11.0)
+    assert loop.ecu.dash == 40
+
+    loop.limit_mph = 45
+    loop.run(1.0)
+    assert loop.sla.state == SlaState.preActive
+    loop.driver_press(ButtonType.accelCruise, in_seconds=0.1)  # against the - confirm: decline
+    loop.run(0.5)
+    assert loop.sla.state == SlaState.inactive, loop.sla.state
+    assert loop.v_cruise_mph == 49, f"declining press must still increment: {loop.v_cruise_mph}"
+
+    dash_at_decline = loop.ecu.dash
+    loop.run(2.4)  # inside the quiet window (3 s)
+    assert loop.ecu.dash <= dash_at_decline + 1, \
+      f"restore began inside the quiet window: {loop.ecu.dash} from {dash_at_decline}"
+    loop.run(12.0)
+    assert loop.ecu.dash == 49, f"restore never completed: {loop.ecu.dash}"
+
+  def test_no_emission_escapes_at_prompt_onset(self):
+    """The servo's own freeze is one hop stale; card's same-frame veto must stop any
+    button frame from reaching the ECU from the first prompting frame on."""
+    loop = Loop(baseline_mph=48, seed=28)
+    loop.limit_mph = 40
+    loop.run(2.0)
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)
+    loop.run(11.0)
+    assert loop.ecu.dash == 40
+
+    loop.limit_mph = 45
+    def frozen(lo):
+      if lo.helper.cruise_arbiter.prompting:
+        assert lo.ecu.dash == 40, f"dash moved during the prompt: {lo.ecu.dash}"
+    loop.run(4.9, assert_each=frozen)
+    assert loop.sla.state == SlaState.preActive
 
   def test_up_confirm_press_at_any_phase_converges(self):
     """The up-confirm press swept across the 20 Hz SLA cycle: at every phase the outcome
