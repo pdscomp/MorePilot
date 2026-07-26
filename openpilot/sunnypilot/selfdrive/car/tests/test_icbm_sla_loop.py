@@ -41,6 +41,7 @@ ButtonType = car.CarState.ButtonEvent.Type
 SendButtonState = custom.IntelligentCruiseButtonManagement.SendButtonState
 SlaState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
 PlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
+EventNameSP = custom.OnroadEventSP.EventName
 
 MPH_MS = CV.MPH_TO_MS
 MPH_KPH = CV.MPH_TO_KPH
@@ -145,6 +146,7 @@ class Loop:
     self.scc_dip_mph = 0.  # SCC-vision target when active, 0 = inactive
     self.driver_queue = {}  # tick -> (ButtonType, hold_ticks)
     self._driver_active = None  # (button, remaining_ticks)
+    self.sla_events = []  # (tick, event int) emitted by SLA, across the whole run
 
     # engage: settle disabled then enabled, dash = baseline
     for _ in range(5):
@@ -164,9 +166,10 @@ class Loop:
 
   def _lp_sp(self):
     LP_SP = custom.LongitudinalPlanSP()
-    targets = {PlanSource.cruise: self.helper.v_cruise_kph * CV.KPH_TO_MS}
-    if self.sla.is_active and self.sla.output_v_target < 200:
-      targets[PlanSource.speedLimitAssist] = self.sla.output_v_target
+    # mirror longitudinal_planner.update_targets: SLA's output always participates
+    # (V_CRUISE_UNSET when idle never wins the min; the preActive hold does)
+    targets = {PlanSource.cruise: self.helper.v_cruise_kph * CV.KPH_TO_MS,
+               PlanSource.speedLimitAssist: self.sla.output_v_target}
     if self.scc_dip_mph > 0:
       targets[PlanSource.sccVision] = self.scc_dip_mph * MPH_MS
     source = min(targets, key=lambda k: targets[k])
@@ -227,10 +230,12 @@ class Loop:
       # (openpilot's own), NOT the dash.
       self.sla.update_car_state(CS)
       if self.tick_n % 5 == 0:
+        self.events_sp.clear()
         self.sla.update(True, False, self.helper.v_cruise_kph * CV.KPH_TO_MS, 0.,
                         self.helper.v_cruise_cluster_kph * CV.KPH_TO_MS,
                         self.limit_mph * MPH_MS, self.limit_mph * MPH_MS, self.limit_mph > 0,
                         0., self.events_sp)
+        self.sla_events.extend((self.tick_n, e) for e in self.events_sp.events)
 
       # selfdrived: servo against the real dash
       CC = car.CarControl(enabled=True)
@@ -444,6 +449,131 @@ class TestDriverInteractions:
     dash_settled = loop.ecu.dash
     loop.run(4.0)
     assert loop.ecu.dash == dash_settled, "servo fought the driver's hold result"
+
+  def test_up_confirm_adopts_limit(self):
+    """Drive 0000000b t=415/461: cruising below a rising limit, + on the prompt must take
+    the setpoint and the dash TO the limit, not leave a +1 orphan with an inert session
+    (min() source selection can never let an above-setpoint SLA target win)."""
+    loop = Loop(baseline_mph=40, seed=20)
+    loop.limit_mph = 45
+    loop.run(2.0)
+    assert loop.sla.state == SlaState.preActive, loop.sla.state
+
+    loop.driver_press(ButtonType.accelCruise, in_seconds=0.1)
+    loop.run(1.0)
+    assert loop.sla.state == SlaState.active, loop.sla.state
+    assert loop.v_cruise_mph == 45, f"setpoint must adopt the confirmed limit: {loop.v_cruise_mph}"
+    assert any(e == EventNameSP.speedLimitActive for _, e in loop.sla_events), \
+      "an explicit up-confirm must announce the adjustment"
+
+    loop.run(10.0)
+    assert loop.ecu.dash == 45, f"dash never walked up to the limit: {loop.ecu.dash}"
+    assert loop.sla.state == SlaState.active
+    assert loop.v_cruise_mph == 45
+
+  def test_up_confirm_keeps_higher_baseline(self):
+    """Zone reopens mid-session: settled at 40 under a 48 baseline, limit rises to 45,
+    the confirm walks the dash up to 45 but the 48 baseline survives (the session caps
+    the plan; the setpoint is only ever raised toward the limit, never lowered by it)."""
+    loop = Loop(baseline_mph=48, seed=21)
+    loop.limit_mph = 40
+    loop.run(2.0)
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)
+    loop.run(11.0)
+    assert loop.ecu.dash == 40
+
+    loop.limit_mph = 45
+    loop.run(1.0)
+    assert loop.sla.state == SlaState.preActive
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)  # cluster 48 > 45: confirm is -
+    loop.run(12.0)
+    assert loop.sla.state == SlaState.active, loop.sla.state
+    assert loop.ecu.dash == 45, f"dash: {loop.ecu.dash}"
+    assert loop.v_cruise_mph == 48, f"baseline corrupted: {loop.v_cruise_mph}"
+
+  def test_pre_active_holds_dash_until_answered(self):
+    """Drive 0000000b t=180.8: limit rises mid-session and ICBM restored the dash toward
+    the baseline while the confirm prompt was still showing. The prompt must freeze the
+    plan: no un-confirmed acceleration; the restore may only run after the timeout."""
+    loop = Loop(baseline_mph=48, seed=22)
+    loop.limit_mph = 40
+    loop.run(2.0)
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)
+    loop.run(11.0)
+    assert loop.ecu.dash == 40
+
+    loop.limit_mph = 45
+    def frozen(lo):
+      if lo.sla.state == SlaState.preActive:
+        assert lo.ecu.dash <= 41, f"dash restored during the prompt: {lo.ecu.dash}"
+    loop.run(4.9, assert_each=frozen)
+    assert loop.sla.state == SlaState.preActive, loop.sla.state
+    loop.run(12.0)  # timeout -> inactive -> quiet window -> restore to baseline
+    assert loop.sla.state == SlaState.inactive
+    assert loop.ecu.dash == 48, f"restore after timeout stopped short: {loop.ecu.dash}"
+
+  def test_pre_active_decline_by_opposite_press(self):
+    """A release against the confirm direction declines the prompt: the session ends at
+    once (no lingering hold shadowing the driver's dialing) and the press still counts
+    as a normal increment."""
+    loop = Loop(baseline_mph=50, seed=23)
+    loop.limit_mph = 35
+    loop.run(2.0)
+    assert loop.sla.state == SlaState.preActive  # confirm would be -
+
+    loop.driver_press(ButtonType.accelCruise, in_seconds=0.1)
+    loop.run(1.0)
+    assert loop.sla.state == SlaState.inactive, loop.sla.state
+    assert loop.v_cruise_mph == 51, f"declining press must still increment: {loop.v_cruise_mph}"
+    assert not any(e == EventNameSP.speedLimitActive for _, e in loop.sla_events)
+
+  def test_engage_on_limit_is_silent(self):
+    """Drive 0000000b t=155.1: resuming with the setpoint already at the limit fired
+    'Auto adjusting to speed limit'. Activation that changes nothing must be silent."""
+    loop = Loop(baseline_mph=45, seed=24)
+    loop.limit_mph = 45
+    loop.run(3.0)
+    assert loop.sla.state == SlaState.active, loop.sla.state
+    assert not loop.sla_events, f"silent activation expected: {loop.sla_events}"
+
+  def test_dial_to_target_activates_silently_and_sticks(self):
+    """Drive 0000000b t=187.05: dialing onto the limit activated SLA with an alert and
+    the same press's latch dismissed it one frame later. It must latch silently and
+    survive its own activating press."""
+    loop = Loop(baseline_mph=43, seed=25)
+    loop.limit_mph = 45
+    loop.run(2.0)
+    assert loop.sla.state == SlaState.preActive
+    loop.run(6.0)  # let the prompt time out (driver ignores it)
+    assert loop.sla.state == SlaState.inactive
+
+    loop.sla_events.clear()
+    loop.driver_press(ButtonType.accelCruise, in_seconds=0.1)
+    loop.run(1.0)
+    loop.driver_press(ButtonType.accelCruise, in_seconds=0.1)
+    loop.run(2.0)
+    assert loop.v_cruise_mph == 45, loop.v_cruise_mph
+    assert loop.sla.state == SlaState.active, f"dial-to-target must latch: {loop.sla.state}"
+    states = set()
+    loop.run(3.0, assert_each=lambda lo: states.add(lo.sla.state))
+    assert states == {SlaState.active}, f"activation did not stick: {states}"
+    assert not any(e == EventNameSP.speedLimitActive for _, e in loop.sla_events), \
+      "dial-to-target activation must be silent"
+
+  def test_up_confirm_press_at_any_phase_converges(self):
+    """The up-confirm press swept across the 20 Hz SLA cycle: at every phase the outcome
+    must be the full adoption (setpoint == dash == limit, session active), never the
+    logged hybrid of a +1 increment with an inert active session."""
+    for offset in TestPressTimingSweeps.OFFSETS_S:
+      loop = Loop(baseline_mph=40, seed=26)
+      loop.limit_mph = 45
+      loop.run(2.0 + offset)
+      assert loop.sla.state == SlaState.preActive
+      loop.driver_press(ButtonType.accelCruise, in_seconds=0.01)
+      loop.run(12.0)
+      assert loop.sla.state == SlaState.active, f"offset {offset}: {loop.sla.state}"
+      assert loop.v_cruise_mph == 45, f"offset {offset}: setpoint {loop.v_cruise_mph}"
+      assert loop.ecu.dash == 45, f"offset {offset}: dash {loop.ecu.dash}"
 
   def test_press_during_scc_dip_with_sla_session(self):
     """Two limiters overlapping: settled SLA session, then a curve dips below it. A +
