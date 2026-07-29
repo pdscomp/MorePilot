@@ -13,12 +13,15 @@ class FakeParams:
     self.bools[key] = value
 
 
-def _cp(brand="mazda", op_long=True, alpha_avail=True):
+def _monitor(toggle: bool, brand="mazda", op_long=True, alpha_avail=True):
   cp = structs.CarParams()
   cp.brand = brand
   cp.openpilotLongitudinalControl = op_long
   cp.alphaLongitudinalAvailable = alpha_avail
-  return cp
+  params = FakeParams(AlphaLongitudinalEnabled=toggle)
+  m = AlphaLongToggleMonitor(cp, params)
+  m.update_params()
+  return m, params
 
 
 def _step(monitor, acc_faulted=False, enabled=False):
@@ -33,74 +36,58 @@ def _step(monitor, acc_faulted=False, enabled=False):
 
 class TestAlphaLongToggleMonitor:
   def test_no_mismatch_no_action(self):
-    params = FakeParams(AlphaLongitudinalEnabled=True)
-    m = AlphaLongToggleMonitor(_cp(op_long=True), params)
-    m.update_params()
+    m, params = _monitor(toggle=True, op_long=True)
     cc_sp = _step(m)
-    assert not cc_sp.radarHandBack
+    assert not cc_sp.stockEcuHandBack
     assert not params.get_bool("OnroadCycleRequested")
 
   def test_enable_direction_cycles_immediately(self):
-    params = FakeParams(AlphaLongitudinalEnabled=True)
-    m = AlphaLongToggleMonitor(_cp(op_long=False), params)
-    m.update_params()
+    m, params = _monitor(toggle=True, op_long=False)
     cc_sp = _step(m)
-    assert not cc_sp.radarHandBack
+    assert not cc_sp.stockEcuHandBack
     assert params.get_bool("OnroadCycleRequested")
 
   def test_disable_runs_handback_until_radar_returns(self):
-    params = FakeParams(AlphaLongitudinalEnabled=False)
-    m = AlphaLongToggleMonitor(_cp(op_long=True), params)
-    m.update_params()
+    m, params = _monitor(toggle=False, op_long=True)
     # radar still silent: hand-back asserted, no cycle yet
     for _ in range(50):
       cc_sp = _step(m, acc_faulted=False)
-      assert cc_sp.radarHandBack
+      assert cc_sp.stockEcuHandBack
       assert not params.get_bool("OnroadCycleRequested")
     # stock radar heard again: cycle requested
     cc_sp = _step(m, acc_faulted=True)
-    assert cc_sp.radarHandBack
+    assert cc_sp.stockEcuHandBack
     assert params.get_bool("OnroadCycleRequested")
 
   def test_disable_times_out_to_cycle(self):
-    params = FakeParams(AlphaLongitudinalEnabled=False)
-    m = AlphaLongToggleMonitor(_cp(op_long=True), params)
-    m.update_params()
+    m, params = _monitor(toggle=False, op_long=True)
     for _ in range(HANDBACK_TIMEOUT_FRAMES):
       _step(m, acc_faulted=False)
     assert params.get_bool("OnroadCycleRequested")
 
   def test_waits_for_disengagement(self):
-    params = FakeParams(AlphaLongitudinalEnabled=False)
-    m = AlphaLongToggleMonitor(_cp(op_long=True), params)
-    m.update_params()
+    m, params = _monitor(toggle=False, op_long=True)
     cc_sp = _step(m, enabled=True)
-    assert not cc_sp.radarHandBack
+    assert not cc_sp.stockEcuHandBack
     # once started, engagement no longer pauses the sequence
     _step(m, enabled=False)
     cc_sp = _step(m, enabled=True)
-    assert cc_sp.radarHandBack
+    assert cc_sp.stockEcuHandBack
 
   def test_non_mazda_disable_cycles_immediately(self):
-    params = FakeParams(AlphaLongitudinalEnabled=False)
-    m = AlphaLongToggleMonitor(_cp(brand="toyota", op_long=True), params)
-    m.update_params()
+    m, params = _monitor(toggle=False, brand="toyota", op_long=True)
     cc_sp = _step(m)
-    assert not cc_sp.radarHandBack
+    assert not cc_sp.stockEcuHandBack
     assert params.get_bool("OnroadCycleRequested")
 
   def test_unavailable_never_acts(self):
-    params = FakeParams(AlphaLongitudinalEnabled=True)
-    m = AlphaLongToggleMonitor(_cp(op_long=False, alpha_avail=False), params)
-    m.update_params()
+    m, params = _monitor(toggle=True, op_long=False, alpha_avail=False)
     cc_sp = _step(m)
-    assert not cc_sp.radarHandBack
+    assert not cc_sp.stockEcuHandBack
     assert not params.get_bool("OnroadCycleRequested")
 
   def test_cycle_requested_only_once(self):
-    params = FakeParams(AlphaLongitudinalEnabled=True)
-    m = AlphaLongToggleMonitor(_cp(op_long=False), params)
-    m.update_params()
+    m, params = _monitor(toggle=True, op_long=False)
     _step(m)
     params.put_bool("OnroadCycleRequested", False)  # hardwared consumed it
     _step(m)

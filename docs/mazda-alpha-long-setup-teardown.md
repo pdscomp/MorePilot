@@ -17,11 +17,11 @@ As-built notes (deviations from §4):
   the gate passes on a warm boot), so the radar is never silenced mid-stock-control;
   openpilot independently cancels stock cruise while accFaulted, so this window is brief.
 - Hand-back detection reuses accFaulted as "stock radar heard": card asserts
-  CarControlSP.radarHandBack, waits for accFaulted (or 8 s, past the S3 fallback), then
-  writes OnroadCycleRequested itself. The UIs now write only the param.
+  CarControlSP.stockEcuHandBack, waits for accFaulted (or 8 s, past the S3 fallback),
+  then writes OnroadCycleRequested itself. The UIs now write only the param.
 - Session state machine: STOCK -> SILENCING (10 02 at 2 Hz) -> SILENCED (tester present +
-  synthetics) -> HANDBACK (10 01 at 2 Hz, synthetics keep flowing) -> RELEASED (quiet).
-  SILENCED -> SILENCING on S3 recovery (auto re-silence).
+  synthetics) -> HANDBACK (10 01 at 2 Hz, synthetics keep flowing) -> back to STOCK
+  (quiet). SILENCED -> SILENCING on S3 recovery (auto re-silence).
 
 ## 1. Symptoms
 
