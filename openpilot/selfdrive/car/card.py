@@ -25,6 +25,7 @@ from openpilot.selfdrive.car.helpers import convert_carControlSP, convert_to_cap
 from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_car_specific_params
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
 from openpilot.sunnypilot.selfdrive.car.card_ext import CardExt
+from openpilot.sunnypilot.selfdrive.car.alpha_long_toggle import AlphaLongToggleMonitor
 
 REPLAY = "REPLAY" in os.environ
 
@@ -181,6 +182,7 @@ class Car:
 
     self.v_cruise_helper = VCruiseHelper(self.CP, self.CP_SP)
     self.card_ext = CardExt(self.CP, self.CP_SP, self.params, self.sm, self.v_cruise_helper, self.CI)
+    self.alpha_long_monitor = AlphaLongToggleMonitor(self.CP, self.params)
 
     self.is_metric = self.params.get_bool("IsMetric")
     self.experimental_mode = self.params.get_bool("ExperimentalMode")
@@ -280,7 +282,9 @@ class Car:
     if self.sm.all_alive(['carControl']):
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
-      self.last_actuators_output, can_sends = self.CI.apply(CC, self.card_ext.controls_update(CS, CC, convert_carControlSP(CC_SP)), now_nanos)
+      CC_SP_struct = convert_carControlSP(CC_SP)
+      self.alpha_long_monitor.update(CS, CC, CC_SP_struct)
+      self.last_actuators_output, can_sends = self.CI.apply(CC, self.card_ext.controls_update(CS, CC, CC_SP_struct), now_nanos)
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
 
       self.CC_prev = CC
@@ -308,6 +312,7 @@ class Car:
       self.dynamic_experimental_control = self.params.get_bool("DynamicExperimentalControl")
       self.v_cruise_helper.read_custom_set_speed_params()
       self.card_ext.update_params()
+      self.alpha_long_monitor.update_params()
 
       time.sleep(0.1)
 
