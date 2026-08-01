@@ -41,6 +41,7 @@ TEMP_TAU = 5.   # 5s time constant
 DISCONNECT_TIMEOUT = 5.  # wait 5 seconds before going offroad after disconnect so you get an alert
 PANDA_STATES_TIMEOUT = round(1000 / SERVICE_LIST['pandaStates'].frequency * 1.5)  # 1.5x the expected pandaState frequency
 ONROAD_CYCLE_TIME = 1  # seconds to wait offroad after requesting an onroad cycle
+OFFROAD_REQUEST_TIMEOUT = 10  # seconds for card's stock-ECU hand-back before force-offroad is granted anyway
 
 class Chestnut:
   # flash offroad, modeld ignores chestnut until the product string matches
@@ -234,6 +235,7 @@ def hardware_thread(end_event, hw_queue) -> None:
   engaged_prev = False
   pwrsave = False
   offroad_cycle_count = 0
+  offroad_request_count = 0
 
   params = Params()
   ext = HardwaredExt(params)
@@ -261,6 +263,19 @@ def hardware_thread(end_event, hw_queue) -> None:
     if ext.update(started_ts is not None):
       offroad_cycle_count = sm.frame
     onroad_conditions["not_onroad_cycle"] = (sm.frame - offroad_cycle_count) >= ONROAD_CYCLE_TIME * SERVICE_LIST['pandaStates'].frequency
+
+    # Force-offroad requests defer to card so brands that silence a stock ECU can hand
+    # it back first (openpilot/sunnypilot/selfdrive/car/alpha_long_toggle.py). Grant
+    # directly when there is no onroad session to hand back from, or if card has not
+    # finished in time - the request must never silently fail.
+    if params.get_bool("OffroadModeRequested"):
+      offroad_request_count += 1
+      no_session = started_ts is None
+      if no_session or offroad_request_count >= OFFROAD_REQUEST_TIMEOUT * SERVICE_LIST['pandaStates'].frequency:
+        params.put_bool("OffroadMode", True)
+        params.put_bool("OffroadModeRequested", False)
+    else:
+      offroad_request_count = 0
 
     if sm.updated['pandaStates'] and len(pandaStates) > 0:
 

@@ -13,12 +13,12 @@ class FakeParams:
     self.bools[key] = value
 
 
-def _monitor(toggle: bool, brand="mazda", op_long=True, alpha_avail=True):
+def _monitor(toggle: bool, brand="mazda", op_long=True, alpha_avail=True, offroad_requested=False):
   cp = structs.CarParams()
   cp.brand = brand
   cp.openpilotLongitudinalControl = op_long
   cp.alphaLongitudinalAvailable = alpha_avail
-  params = FakeParams(AlphaLongitudinalEnabled=toggle)
+  params = FakeParams(AlphaLongitudinalEnabled=toggle, OffroadModeRequested=offroad_requested)
   m = AlphaLongToggleMonitor(cp, params)
   m.update_params()
   return m, params
@@ -92,3 +92,46 @@ class TestAlphaLongToggleMonitor:
     params.put_bool("OnroadCycleRequested", False)  # hardwared consumed it
     _step(m)
     assert not params.get_bool("OnroadCycleRequested")
+
+
+class TestOffroadRequest:
+  def test_mazda_op_long_hands_back_before_granting(self):
+    m, params = _monitor(toggle=True, op_long=True, offroad_requested=True)
+    for _ in range(50):
+      cc_sp = _step(m)
+      assert cc_sp.stockEcuHandBack
+      assert not params.get_bool("OffroadMode")
+    _step(m, acc_faulted=True)
+    assert params.get_bool("OffroadMode")
+    assert not params.get_bool("OffroadModeRequested")
+    assert not params.get_bool("OnroadCycleRequested")
+
+  def test_handback_timeout_still_grants(self):
+    m, params = _monitor(toggle=True, op_long=True, offroad_requested=True)
+    for _ in range(HANDBACK_TIMEOUT_FRAMES):
+      _step(m)
+    assert params.get_bool("OffroadMode")
+
+  def test_non_mazda_grants_immediately(self):
+    m, params = _monitor(toggle=True, brand="toyota", op_long=True, offroad_requested=True)
+    cc_sp = _step(m)
+    assert not cc_sp.stockEcuHandBack
+    assert params.get_bool("OffroadMode")
+
+  def test_stock_long_grants_immediately(self):
+    m, params = _monitor(toggle=False, op_long=False, offroad_requested=True)
+    cc_sp = _step(m)
+    assert not cc_sp.stockEcuHandBack
+    assert params.get_bool("OffroadMode")
+
+  def test_offroad_wins_over_pending_toggle_cycle(self):
+    # toggle-off and force-offroad both pending: go offroad, skip the cycle
+    m, params = _monitor(toggle=False, op_long=True, offroad_requested=True)
+    _step(m, acc_faulted=True)
+    assert params.get_bool("OffroadMode")
+    assert not params.get_bool("OnroadCycleRequested")
+
+  def test_grant_works_when_alpha_unavailable(self):
+    m, params = _monitor(toggle=False, op_long=False, alpha_avail=False, offroad_requested=True)
+    _step(m)
+    assert params.get_bool("OffroadMode")
