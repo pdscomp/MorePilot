@@ -235,3 +235,23 @@ only applied at ControlsReady, when controls TX starts within the same second. F
 hardwared clears ControlsReady + FirmwareQueryDone when it consumes OnroadCycleRequested,
 making the cycle sequence exactly like a normal boot. The race exists upstream too (any
 OnroadCycleRequested user).
+
+## 8. Force-offroad and the S3-recovery degraded state (2026-08-01 drive)
+
+Routes 38-3b validated the whole enable flow end to end: fresh LONG safety applied
+(post-race-fix), teardown at ~14 s, accFaulted cleared, op-long engaged and drove
+(route 39). Then "Always Offroad" was toggled mid-drive: card died before any hand-back
+(pandad NO_OUTPUT ~200 ms later), the radar sat silent until its ~5 s S3 timeout, and
+came back MID-DRIVE in a degraded state - stock CRZ_CTRL alternating healthy
+`0201010000000000` with fault `1a01010002000600`, body ECU cycling PEDALS.ACC_OFF every
+1-25 s, CRZ_EVENTS chiming 64<->84. The cycling persisted across openpilot restarts and
+two more teardown sessions (3a, 3b) and blocked every cruise SET; only an ignition cycle
+clears it. Key contrast: an ordered `10 01` hand-back (route 39's teardown counterpart)
+returns the radar cleanly, and a teardown from a healthy stock state engages fine - it
+is specifically the unmanaged S3 recovery at speed that leaves the car cranky.
+
+Fix (main `042865e84e`): "Always Offroad" writes OffroadModeRequested; the card monitor
+runs the ordered hand-back and then grants OffroadMode (offroad wins over a pending
+toggle cycle); hardwared grants directly when offroad already or after a 10 s timeout so
+the request can never silently fail. Remaining unmanaged-blackout paths: openpilot crash
+mid-drive and ignition-off (harmless - car powers down with it).
