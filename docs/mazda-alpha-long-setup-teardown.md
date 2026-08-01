@@ -209,3 +209,29 @@ hypotheses and, combined with the `1a`/`23`/`0a` timing table, localized the FSC
 the seconds immediately following its boot-settle broadcast (§4.5). Remaining on-car
 validations: radar wake latency after explicit `10 01` (§4.2) and the 10 s margin itself
 (first deferred-teardown drive should log settle→UDS gap and outcome).
+
+## 7. Field failures after first implementation (2026-07-30 / 08-01)
+
+**Routes 2b/2e (2026-07-30, fixed opendbc `dc5a9a6378`)**: card crashed on its first
+`CS.update` — `cp_cam.vl_all["CAM_LANEINFO"]` KeyError. `CANParser.vl` lazily registers
+messages on access; `vl_all` does not, so every message read through `vl_all` must be in
+`get_can_parsers()`. Symptoms all cascaded from the dead card: canError ("Unknown Vehicle
+Variant"), dead toggle monitor, and on the enable-while-driving attempt an FSC ERR_BIT
+latch (relay open + no CAM_LKAS publisher). Regression: `test_mazda_carstate.py` runs the
+real parsers through the interface both ways.
+
+**Route 34 (2026-08-01, fixed main `ee7bc34d3e`)**: with the crash fixed, enabling onroad
+still latched ERR_BIT at t=5.7 s — before the settle gate could act (no UDS all session).
+Root cause: pandad races manager's onroad-transition param clearing across the
+OnroadCycleRequested restart (the offroad gap is only ~1.7 s). pandad won, consumed stale
+FirmwareQueryDone/ControlsReady/CarParams, applied the PREVIOUS session's safety (mazda
+param 0, stock) during the gap and latched `safety_configured_`. Two consequences: the
+harness relay opened ~8 s before controls came up (camera LKAS frames blocked from the
+car with no replacement -> car LKAS fault + FSC ERR_BIT ~7 s into the blackout), and the
+whole session ran under stock safety, which would also have blocked every op-long TX
+(0x764 UDS, synthetic CRZ/radar frames are in MAZDA_LONG_TX_MSGS only). Normal boots are
+immune because ELM327/NO_OUTPUT/SILENT keep the relay CLOSED and the car safety mode is
+only applied at ControlsReady, when controls TX starts within the same second. Fix:
+hardwared clears ControlsReady + FirmwareQueryDone when it consumes OnroadCycleRequested,
+making the cycle sequence exactly like a normal boot. The race exists upstream too (any
+OnroadCycleRequested user).
