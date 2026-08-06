@@ -6,10 +6,14 @@ Log evidence from drives 2026-07-26/27/28, pulled to
 `tools/mazda_long/test_data/alpha_long_logs/` (gitignored).
 
 As-built notes (deviations from §4):
-- Gate bits are NO_ERR_BIT + BIT2 only. LINE_VISIBLE is real lane-line state while
+- Gate bit is NO_ERR_BIT only. LINE_VISIBLE is real lane-line state while
   driving (set for long stretches in routes 23/27/28), so it is excluded; a latched
   fault (ERR_BIT) also holds the gate closed, which keeps the teardown off an
   already-faulted car and preserves its AEB.
+- BIT2 was in the gate until 2026-08-02 and was dropped (see §9). It is byte-identical
+  to NO_ERR_BIT on all 40 routes here, so it never carried information, but a second
+  CX-5 2022 cold-booted with it latched high and NO_ERR_BIT clear, pinning the gate shut
+  for a whole ignition cycle.
 - accFaulted semantics unchanged (silent < 1 s): the "Cruise Fault" alert now covers the
   longer pre-teardown phase too; replacing it with a friendlier handover alert is the
   remaining task (#5).
@@ -103,7 +107,7 @@ No UDS response reading needed — verification is the established infer-from-bu
 (`carstate.py:109-116` stock CRZ_INFO silence counter).
 
 - Gate condition (RESOLVED — FSC boot-settle signal, §4.5): CAM_LANEINFO
-  `NO_ERR_BIT == 0 AND BIT2 == 0 AND ERR_BIT == 0` held continuously for ~10 s
+  `NO_ERR_BIT == 0 AND ERR_BIT == 0` held continuously for ~10 s
   (LINE_VISIBLE excluded as-built: it is live lane-line state while driving).
   Computed in carstate, read by carcontroller off the CarState object; no side channel.
   Total boot delay ≈ settle (3–6 s) + 10 s margin ≈ 13–16 s — still well inside stock
@@ -255,3 +259,31 @@ runs the ordered hand-back and then grants OffroadMode (offroad wins over a pend
 toggle cycle); hardwared grants directly when offroad already or after a 10 s timeout so
 the request can never silently fail. Remaining unmanaged-blackout paths: openpilot crash
 mid-drive and ignition-off (harmless - car powers down with it).
+
+
+## 9. BIT2 dropped from the gate (2026-08-02)
+
+Route `7c735af5fce56485|00000011` — a different CX-5 2022, same FSC firmware
+(`GSH7-67XK2-U`), same radar (`K131-67XK2-F`) — cold-booted in Park with
+`CAM_LANEINFO` byte 1 stuck at `0x21` for the whole 36.5 s ignition cycle. BIT2 set,
+NO_ERR_BIT clear, ERR_BIT clear.
+
+Consequences, all confirmed on that log:
+
+- `settled` false on 3628 of 3646 camera frames; BIT2 the **sole** blocker on every one.
+- Longest continuous settled run 0.00 s against the 10 s requirement, so the gate never opened.
+- Zero UDS frames transmitted; stock CRZ_INFO alive 0.01-36.46 s.
+- Two-master guard therefore held `accFaulted` from 4.0 s to the end of the drive.
+- No camera fault at any point: ERR_BIT, ERR_BIT_1, ERR_BIT_2 never set, no steer faults.
+  This is not the i-ACTIVSENSE latch of §5; the FSC was healthy and openpilot simply never
+  started the takeover, with nothing surfaced to the driver to explain it.
+
+Fix: drop BIT2 from `settled`. Provably a no-op on the 40 routes here (BIT2 and NO_ERR_BIT
+agree frame for frame in every one, so first-settle times are unchanged); on the reporting
+car it opens the gate ~10 s after the first camera frame, still inside the ~8 s post-settle
+margin §6 proves clean. ERR_BIT continues to veto teardown on a genuinely faulted camera.
+
+Caveat: that car never left Park in the captured segment, so it is not proven that BIT2
+would have stayed latched once driving. Its other route (`00000008`, alpha long working)
+starts with BIT2 already clear and so does not test the cold-boot path. A cold-boot-then-drive
+log from that car would settle whether BIT2 clears on the shift to Drive.
