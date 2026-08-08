@@ -1,9 +1,8 @@
 from cereal import log
 
 
-# Once CAN ignition is seen on any valid panda, stop trusting ignitionLine:
-# on Mazda it lags ~30s after key-off while ignitionCan falls promptly.
-# The latch never resets; resetting would oscillate onroad/offroad.
+# Once CAN ignition is seen on any valid panda, stop using ignitionLine to determine
+# ignition status. ignitionLine on Mazda stays high for 30s after ignition off.
 ignition_can_seen = False
 
 
