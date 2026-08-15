@@ -93,6 +93,7 @@ class TestManager(OpenpilotTestCase):
     monkeypatch.setattr(manager, "Params", lambda: params)
     monkeypatch.setattr(manager, "save_bootlog", lambda: None)
     monkeypatch.setattr(manager, "get_build_metadata", lambda: build)
+    monkeypatch.setattr(manager, "finalize_ti_enable", lambda p: events.append(("finalize", p)))
     monkeypatch.setattr(manager, "enforce_backend_state", lambda p: events.append(("enforce", p)))
     monkeypatch.setattr(manager, "register", lambda show_spinner: events.append(("register", show_spinner)) or "dongle")
     monkeypatch.setattr(manager.sentry, "init", lambda project: events.append(("sentry", project)))
@@ -103,8 +104,9 @@ class TestManager(OpenpilotTestCase):
 
     manager.manager_init()
 
-    assert [event[0] for event in events] == ["enforce", "register", "sentry"]
+    assert [event[0] for event in events] == ["finalize", "enforce", "register", "sentry"]
     assert events[0][1] is params
+    assert events[1][1] is params
 
   @unittest.skip("this test is flaky the way it's currently written, should be moved to test_onroad")
   def test_clean_exit(self, subtests):

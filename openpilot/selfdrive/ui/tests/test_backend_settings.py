@@ -129,7 +129,7 @@ def test_pairing_empty_token_renders_error(module, params_attr, texture_attr, mo
 
 class FakeParams:
   def __init__(self, fail_on=None, silent=False):
-    self.values = {"KonikInterlock": False}
+    self.values = {"KonikInterlock": False, "TorqueInterceptorEnabled": False}
     self.writes = []
     self.fail_on = fail_on
     self.silent = silent

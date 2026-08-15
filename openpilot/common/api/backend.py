@@ -91,6 +91,23 @@ def enable_interlock(params: Params) -> None:
   put_bool_checked(params, "KonikInterlock", True)
 
 
+def enable_ti(params: Params) -> None:
+  # The only path that should set TorqueInterceptorEnabled: it locks the backend first.
+  # Setting the param out of band (params CLI) enables TI without the interlock. Don't.
+  enable_interlock(params)
+  put_bool_checked(params, "TorqueInterceptorEnabled", True)
+
+
+def request_ti_enable(params: Params) -> None:
+  put_bool_checked(params, "TorqueInterceptorEnableRequest", True)
+
+
+def finalize_ti_enable(params: Params) -> None:
+  if params.get_bool("TorqueInterceptorEnableRequest"):
+    enable_ti(params)
+    put_bool_checked(params, "TorqueInterceptorEnableRequest", False)
+
+
 def set_konik_enabled(params: Params, enabled: bool) -> None:
   if not enabled and is_konik_locked(params):
     raise RuntimeError("Konik cannot be disabled while locked; factory reset is required")

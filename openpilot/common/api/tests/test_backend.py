@@ -14,9 +14,11 @@ from openpilot.common.api.backend import (
   connect_client,
   enable_interlock,
   enforce_backend_state,
+  finalize_ti_enable,
   is_konik_locked,
   lock_sentinel,
   pairing_url,
+  request_ti_enable,
   set_konik_enabled,
   use_konik,
 )
@@ -120,6 +122,78 @@ def test_clearing_interlock_preserves_locked_backend(tmp_path):
     "KonikInterlock": True,
   })
   params.put_bool("KonikInterlock", False, block=True)
+  enforce_backend_state(params)
+  assert params.get_bool("KonikLockout")
+  assert params.get_bool("UseKonikServer")
+  assert use_konik(params)
+
+
+def test_ti_request_only_stages_activation(tmp_path):
+  params = FakeParams(tmp_path)
+  request_ti_enable(params)
+  assert params.values == {"TorqueInterceptorEnableRequest": True}
+  assert not is_konik_locked(params)
+
+
+def test_finalize_ti_enable_clears_request_last(tmp_path):
+  params = FakeParams(tmp_path, {"TorqueInterceptorEnableRequest": True})
+  finalize_ti_enable(params)
+  assert lock_sentinel(params).exists()
+  assert params.values == {
+    "TorqueInterceptorEnableRequest": False,
+    "KonikLockout": True,
+    "UseKonikServer": True,
+    "KonikInterlock": True,
+    "TorqueInterceptorEnabled": True,
+  }
+  assert params.writes[-1] == ("TorqueInterceptorEnableRequest", False)
+
+
+def test_partial_ti_enable_fails_closed_and_retries(tmp_path):
+  params = FakeParams(tmp_path, {"TorqueInterceptorEnableRequest": True})
+  params.fail_on = "KonikLockout"
+  with pytest.raises(OSError, match="injected"):
+    finalize_ti_enable(params)
+  assert lock_sentinel(params).exists()
+  assert use_konik(params)
+  assert params.get_bool("TorqueInterceptorEnableRequest")
+
+  params.fail_on = None
+  finalize_ti_enable(params)
+  assert params.get_bool("KonikLockout")
+  assert params.get_bool("UseKonikServer")
+  assert params.get_bool("KonikInterlock")
+  assert params.get_bool("TorqueInterceptorEnabled")
+  assert not params.get_bool("TorqueInterceptorEnableRequest")
+
+
+@pytest.mark.parametrize("failed_key", [
+  "KonikLockout",
+  "UseKonikServer",
+  "KonikInterlock",
+  "TorqueInterceptorEnabled",
+  "TorqueInterceptorEnableRequest",
+])
+def test_partial_ti_enable_detects_silent_write_failure(tmp_path, failed_key):
+  params = FakeParams(tmp_path, {"TorqueInterceptorEnableRequest": True})
+  params.silent_fail_on = failed_key
+
+  with pytest.raises(OSError, match=failed_key):
+    finalize_ti_enable(params)
+
+  assert lock_sentinel(params).exists()
+  assert use_konik(params)
+  assert params.get_bool("TorqueInterceptorEnableRequest")
+
+
+def test_disabling_ti_preserves_locked_backend(tmp_path):
+  params = FakeParams(tmp_path, {
+    "KonikLockout": True,
+    "UseKonikServer": True,
+    "KonikInterlock": True,
+    "TorqueInterceptorEnabled": True,
+  })
+  params.put_bool("TorqueInterceptorEnabled", False, block=True)
   enforce_backend_state(params)
   assert params.get_bool("KonikLockout")
   assert params.get_bool("UseKonikServer")
