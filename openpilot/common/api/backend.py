@@ -2,8 +2,11 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
-from openpilot.common.api.base import BaseApi
+from openpilot.common.api.comma_connect import API_HOST, CommaConnectApi
 from openpilot.common.params import Params
+
+
+UNREGISTERED_DONGLE_ID = "UnregisteredDevice"
 
 
 @dataclass(frozen=True)
@@ -17,7 +20,7 @@ class BackendConfig:
 
 COMMA_BACKEND = BackendConfig(
   "comma",
-  "https://api.commadotai.com",
+  API_HOST,
   "wss://athena.comma.ai",
   "https://connect.comma.ai",
   "CommaDongleId",
@@ -96,7 +99,7 @@ def set_konik_enabled(params: Params, enabled: bool) -> None:
 
 def _active_dongle_id(params: Params, config: BackendConfig, allow_unregistered: bool) -> str | None:
   dongle_id = params.get(config.dongle_param)
-  if dongle_id is None and not allow_unregistered:
+  if dongle_id in (None, UNREGISTERED_DONGLE_ID) and not allow_unregistered:
     raise RuntimeError(f"{config.name} backend requires {config.dongle_param}")
   return dongle_id
 
@@ -105,10 +108,10 @@ def active_dongle_id(params: Params, allow_unregistered: bool = False) -> str | 
   return _active_dongle_id(params, backend_config(params), allow_unregistered)
 
 
-def connect_client(params: Params, allow_unregistered: bool = False) -> tuple[BackendConfig, BaseApi]:
+def connect_client(params: Params, allow_unregistered: bool = False) -> tuple[BackendConfig, CommaConnectApi]:
   config = backend_config(params)
   dongle_id = _active_dongle_id(params, config, allow_unregistered)
-  return config, BaseApi(dongle_id, config.api_host)
+  return config, CommaConnectApi(dongle_id, config.api_host)
 
 
 def pairing_url(params: Params, token: str) -> str:

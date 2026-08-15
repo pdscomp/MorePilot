@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 
+import openpilot.common.api as connect_api
 import openpilot.common.api.backend as backend
+from openpilot.common.api import Api, api_get
 from openpilot.common.api.backend import (
   COMMA_BACKEND,
   KONIK_BACKEND,
@@ -151,6 +153,13 @@ def test_locked_backend_requires_konik_identity(tmp_path):
   assert client.dongle_id is None
 
 
+def test_connect_client_rejects_cached_unregistered_identity(tmp_path):
+  params = FakeParams(tmp_path, {"UseKonikServer": True, "KonikDongleId": backend.UNREGISTERED_DONGLE_ID})
+  with pytest.raises(RuntimeError, match="KonikDongleId"):
+    connect_client(params)
+  assert connect_client(params, allow_unregistered=True)[1].dongle_id == backend.UNREGISTERED_DONGLE_ID
+
+
 def test_connect_client_returns_one_backend_snapshot(tmp_path, monkeypatch):
   params = FakeParams(tmp_path, {"CommaDongleId": "comma-id", "KonikDongleId": "konik-id"})
   selections = iter((COMMA_BACKEND, KONIK_BACKEND))
@@ -213,3 +222,55 @@ def test_backend_endpoints_and_pairing_urls(tmp_path):
   assert pairing_url(params, "token") == "https://connect.comma.ai/?pair=token"
   set_konik_enabled(params, True)
   assert pairing_url(params, "token") == "https://stable.konik.ai/?pair=token"
+
+
+def test_long_lived_api_resolves_backend_and_identity_per_operation(tmp_path, monkeypatch):
+  params = FakeParams(tmp_path, {"CommaDongleId": "comma-id", "KonikDongleId": "konik-id"})
+  calls = []
+
+  class RecordingClient:
+    def __init__(self, dongle_id, api_host):
+      self.dongle_id = dongle_id
+      self.api_host = api_host
+
+    def request(self, method, endpoint, **kwargs):
+      calls.append((self.dongle_id, self.api_host, method, endpoint))
+
+  monkeypatch.setattr(connect_api, "Params", lambda: params)
+  monkeypatch.setattr(backend, "CommaConnectApi", RecordingClient)
+  api = Api("legacy-id")
+
+  api.request("GET", "v1/test")
+  params.values["KonikLockout"] = True
+  api.request("GET", "v1/test")
+
+  assert calls == [
+    ("comma-id", COMMA_BACKEND.api_host, "GET", "v1/test"),
+    ("konik-id", KONIK_BACKEND.api_host, "GET", "v1/test"),
+  ]
+
+
+def test_registration_api_get_routes_without_registered_identity(tmp_path, monkeypatch):
+  params = FakeParams(tmp_path, {"UseKonikServer": True})
+  calls = []
+
+  class RecordingClient:
+    def __init__(self, dongle_id, api_host):
+      assert dongle_id is None
+      self.api_host = api_host
+
+    def api_get(self, endpoint, method, timeout, access_token, session, **kwargs):
+      calls.append((self.api_host, endpoint, method))
+
+  monkeypatch.setattr(connect_api, "Params", lambda: params)
+  monkeypatch.setattr(backend, "CommaConnectApi", RecordingClient)
+  api_get("v2/pilotauth/", method="POST")
+  assert calls == [(KONIK_BACKEND.api_host, "v2/pilotauth/", "POST")]
+
+
+def test_non_registration_api_get_requires_backend_identity(tmp_path, monkeypatch):
+  params = FakeParams(tmp_path, {"UseKonikServer": True})
+  monkeypatch.setattr(connect_api, "Params", lambda: params)
+
+  with pytest.raises(RuntimeError, match="KonikDongleId"):
+    api_get("v1/devices")
