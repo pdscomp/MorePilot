@@ -5,6 +5,7 @@ import pytest
 import openpilot.selfdrive.ui.lib.api_helpers as api_helpers
 import openpilot.selfdrive.ui.mici.widgets.pairing_dialog as mici_pairing
 import openpilot.selfdrive.ui.sunnypilot.layouts.settings.software as software
+import openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.mazda as mazda
 import openpilot.selfdrive.ui.widgets.pairing_dialog as tici_pairing
 from openpilot.system.ui.widgets import DialogResult
 
@@ -150,6 +151,55 @@ class FakeParams:
 class FakeDialog:
   def __init__(self, *_, callback=None, **__):
     self.callback = callback
+
+
+def bare_mazda_settings(monkeypatch, params, offroad):
+  pushed = []
+  toggle_states = []
+  state = SimpleNamespace(params=params, is_offroad=lambda: offroad[0])
+  monkeypatch.setattr(mazda, "ui_state", state)
+  monkeypatch.setattr(mazda, "ConfirmDialog", FakeDialog)
+  monkeypatch.setattr(mazda, "alert_dialog", lambda _: "alert")
+  monkeypatch.setattr(mazda.gui_app, "push_widget", pushed.append)
+  monkeypatch.setattr(mazda.cloudlog, "exception", lambda _: None)
+
+  settings = object.__new__(mazda.MazdaSettings)
+  settings.ti_toggle = SimpleNamespace(action_item=SimpleNamespace(set_state=toggle_states.append))
+  return settings, pushed, toggle_states
+
+
+@pytest.mark.parametrize(("result", "offroad"), (
+  (DialogResult.CANCEL, True),
+  (DialogResult.CONFIRM, False),
+))
+def test_ti_noncommitting_exits_restore_toggle(monkeypatch, result, offroad):
+  params = FakeParams()
+  settings, pushed, toggle_states = bare_mazda_settings(monkeypatch, params, [offroad])
+
+  settings._on_ti_toggled(True)
+  pushed[0].callback(result)
+
+  assert params.writes == []
+  assert toggle_states == [False]
+
+
+@pytest.mark.parametrize("silent", (False, True))
+def test_ti_reboot_failure_clears_request_and_reports_error(monkeypatch, silent):
+  params = FakeParams(fail_on="DoReboot", silent=silent)
+  offroad = [True]
+  settings, pushed, toggle_states = bare_mazda_settings(monkeypatch, params, offroad)
+
+  settings._on_ti_toggled(True)
+  pushed[0].callback(DialogResult.CONFIRM)
+
+  assert params.writes == [
+    ("TorqueInterceptorEnableRequest", True),
+    ("DoReboot", True),
+    ("TorqueInterceptorEnableRequest", False),
+  ]
+  assert not params.get_bool("TorqueInterceptorEnableRequest")
+  assert pushed[-1] == "alert"
+  assert toggle_states == [False]
 
 
 def bare_software_settings(monkeypatch, params, offroad, locked=False):
