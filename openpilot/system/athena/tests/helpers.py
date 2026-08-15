@@ -48,6 +48,9 @@ class MockWebsocket:
     self.send_queue = send_queue
     self.sock = socket.socket()
 
+  def settimeout(self, timeout):
+    self.timeout = timeout
+
   def recv(self):
     data = self.recv_queue.get()
     if isinstance(data, Exception):
