@@ -25,6 +25,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"CarParamsPersistent", {PERSISTENT, BYTES}},
     {"CarParamsPrevRoute", {PERSISTENT, BYTES}},
     {"CompletedTrainingVersion", {PERSISTENT, STRING, "0"}},
+    {"CommaDongleId", {PERSISTENT | DONT_LOG, STRING}},
     {"ControlsReady", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL}},
     {"CurrentBootlog", {PERSISTENT, STRING}},
     {"CurrentRoute", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
@@ -58,6 +59,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"HasAcceptedTerms", {PERSISTENT, STRING, "0"}},
     {"InstallDate", {PERSISTENT, TIME}},
     {"IsDriverViewEnabled", {CLEAR_ON_MANAGER_START, BOOL}},
+    {"KonikDongleId", {PERSISTENT | DONT_LOG, STRING}},
+    {"KonikLockout", {PERSISTENT | DONT_LOG, BOOL, "0"}},
     {"IsEngaged", {PERSISTENT, BOOL}},
     {"IsLdwEnabled", {PERSISTENT | BACKUP, BOOL}},
     {"IsLiveStreaming", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, BOOL}},
@@ -109,11 +112,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"Offroad_UpdateFailed", {CLEAR_ON_MANAGER_START, JSON}},
     {"Offroad_DriverMonitoringUncertain", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, JSON}},
     {"OnroadCycleRequested", {CLEAR_ON_MANAGER_START, BOOL}},
-<<<<<<< HEAD
-=======
     {"StockEcuHandBackRequest", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, JSON}},
     {"StockEcuHandBackResult", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, JSON}},
->>>>>>> a905b69b4 (car: route force-offroad through the stock ECU hand-back)
     {"OpenpilotEnabledToggle", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"PandaHeartbeatLost", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
     {"PrimeType", {PERSISTENT, INT}},
@@ -232,6 +232,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SunnylinkdPid", {PERSISTENT, INT}},
     {"SunnylinkEnabled", {PERSISTENT, BOOL, "1"}},
     {"SunnylinkTempFault", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL, "0"}},
+    {"SunnylinkUploadQueue", {PERSISTENT | DONT_LOG, JSON}},
 
     // Backup Manager params
     {"BackupManager_CreateBackup", {PERSISTENT, BOOL}},
@@ -298,6 +299,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"LateralJerkTorqueController", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"LiveTorqueParamsToggle", {PERSISTENT | BACKUP , BOOL}},
     {"LiveTorqueParamsRelaxedToggle", {PERSISTENT | BACKUP , BOOL}},
+    {"KonikInterlock", {PERSISTENT | DONT_LOG, BOOL, "0"}},
     {"TorqueControlTune", {PERSISTENT | BACKUP, FLOAT, "0.0"}},
     {"TorqueParamsOverrideEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TorqueParamsOverrideFriction", {PERSISTENT | BACKUP, FLOAT, "0.1"}},
@@ -329,5 +331,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"DefaultModelApplied", {PERSISTENT | BACKUP, BOOL}},  // Firehose Model applied as the default once (models/default_bootstrap.py)
     {"IcbmDemandMigrated", {PERSISTENT | BACKUP, BOOL}},  // ICBM toggle to ICBM on demand (intelligent_cruise_button_management/migration.py)
     {"MazdaTorqueDefaultsApplied", {PERSISTENT | BACKUP, BOOL}},  // steer-to-zero Mazda torque defaults seeded once
-    {"MazdaTorqueTuneSeeded", {PERSISTENT | BACKUP, FLOAT}},  // tune version last seeded for the steer-to-zero Mazda EPS; a bump re-seeds everyone once
+    {"MazdaTorqueTuneSeeded", {PERSISTENT | BACKUP, FLOAT}},  // tune version last seeded for the steer-to-zero Mazda EPS; a bump re-seeds everyone once    // Backend policy: which Connect backend the device trusts. Fail-closed pieces
+    // default off; UseKonikServer keeps the legacy default until backend.py lands fully.
+    {"UseKonikServer", {PERSISTENT, BOOL, "1"}},
 };
