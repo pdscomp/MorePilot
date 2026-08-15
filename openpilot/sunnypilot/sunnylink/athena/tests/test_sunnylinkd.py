@@ -20,7 +20,19 @@ from openpilot.sunnypilot.models.model_name import DEFAULT_BIG_MODEL
 from openpilot.sunnypilot.sunnylink.athena import sunnylinkd
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.common.hardware.hw import Paths
-from openpilot.common.params import Params
+from openpilot.common.params import ParamKeyFlag, Params
+
+
+CONNECT_PROTECTED_PARAMS = {
+  "UseKonikServer",
+  "KonikLockout",
+  "KonikInterlock",
+  "CommaDongleId",
+  "KonikDongleId",
+  "DongleId",
+  "AthenadUploadQueue",
+  "SunnylinkUploadQueue",
+}
 
 
 def _cache_upload(param_key, source_backend):
@@ -63,7 +75,22 @@ class TestSunnylinkdMethods(OpenpilotTestCase):
 
     sunnylinkd.saveParams(blocked_params)
 
+    for value in ("attacker", "", "0"):
+      sunnylinkd.saveParams(dict.fromkeys(CONNECT_PROTECTED_PARAMS | {"GithubUsername", "GithubSshKeys"}, value))
+
     assert len(self.saved_params) == 0
+
+  def test_connect_security_params_are_not_remotely_readable(self):
+    assert CONNECT_PROTECTED_PARAMS.isdisjoint(sunnylinkd.dispatcher["getParamsAllKeys"]())
+    response = sunnylinkd.dispatcher["getParams"](sorted(CONNECT_PROTECTED_PARAMS))
+    assert response == {"params": "[]"}
+
+  def test_no_remote_param_remove_method(self):
+    assert not {name for name in sunnylinkd.dispatcher if "param" in name.lower() and ("remove" in name.lower() or "delete" in name.lower())}
+
+  def test_connect_security_params_are_excluded_from_backup(self):
+    backup_keys = {key.decode() for key in Params().all_keys(ParamKeyFlag.BACKUP)}
+    assert CONNECT_PROTECTED_PARAMS.isdisjoint(backup_keys)
 
   def test_upload_rpc_uses_sunnylink_provenance(self):
     athenad.upload_queue = queue.PriorityQueue()

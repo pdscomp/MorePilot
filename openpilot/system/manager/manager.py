@@ -7,7 +7,6 @@ import time
 import traceback
 
 import openpilot.cereal.messaging as messaging
-import openpilot.system.sentry as sentry
 from openpilot.common.api.backend import enforce_backend_state
 from openpilot.common.utils import atomic_write
 from openpilot.sunnypilot.common.ignition import get_ignition_state

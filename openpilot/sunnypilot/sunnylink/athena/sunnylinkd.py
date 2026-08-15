@@ -57,6 +57,14 @@ BLOCKED_PARAMS = {
   "GithubSshKeys",   # Direct SSH key injection
   "HasAcceptedTerms",
   "HasAcceptedTermsSP",
+  "UseKonikServer",
+  "KonikLockout",
+  "KonikInterlock",
+  "CommaDongleId",
+  "KonikDongleId",
+  "DongleId",
+  "AthenadUploadQueue",
+  "SunnylinkUploadQueue",
   "OnroadCycleRequested",      # Prevent remote cycle trigger
   "AlphaLongitudinalEnabled",  # Flips longitudinal mode via an onroad cycle; local UI only
   "OffroadMode",               # Applied by hardwared alone; remote writes go through OffroadModeRequested
@@ -184,7 +192,7 @@ def toggleLogUpload(enabled: bool):
 
 @dispatcher.add_method
 def getParamsAllKeys() -> list[str]:
-  keys: list[str] = [k.decode('utf-8') for k in Params().all_keys()]
+  keys: list[str] = [k.decode('utf-8') for k in Params().all_keys() if k.decode('utf-8') not in BLOCKED_PARAMS]
   return keys
 
 
@@ -226,7 +234,7 @@ def getParams(params_keys: list[str], compression: bool = False) -> str | dict[s
       ParamKeyType.BYTES.value: b"",
     }
 
-    param_keys_validated = [key for key in params_keys if key in available_keys]
+    param_keys_validated = [key for key in params_keys if key in available_keys and key not in BLOCKED_PARAMS]
     params_dict: dict[str, list[dict[str, str | bool | int]]] = {"params": []}
     for key in param_keys_validated:
       value = get_param_as_byte(key)

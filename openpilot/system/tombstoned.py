@@ -144,14 +144,6 @@ def main() -> NoReturn:
     now_tombstones = set(get_tombstones())
 
     for fn, _ in (now_tombstones - initial_tombstones):
-      # clear logs if we're not interested in them
-      if not should_report:
-        try:
-          os.remove(fn)
-        except Exception:
-          pass
-        continue
-
       try:
         cloudlog.info(f"reporting new tombstone {fn}")
         if fn.endswith(".crash"):
