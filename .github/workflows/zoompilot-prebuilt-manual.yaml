@@ -1,0 +1,193 @@
+name: zoompilot prebuilt (any branch)
+
+# Manual flat-branch builder: builds whatever branch you run it from on the
+# self-hosted comma device and force-publishes the compiled tree to a flat
+# branch, same mechanics as "zoompilot prebuilt" but for any source branch.
+#
+# Target branch: the optional target_branch input, or the source branch name
+# with "/" replaced by "-" (e.g. ZoomPilot/devel -> ZoomPilot-devel). The
+# target is owned by this workflow and force-pushed on every run, so never
+# commit to it by hand and never merge into it.
+#
+# The runner only picks jobs up while the device is off the car: hardwared sets
+# GithubRunnerSufficientVoltage above 9V and process_config stops the runner service
+# when it is set. Bench-power the device to let a build run.
+
+env:
+  BUILD_DIR: "/data/openpilot"
+  OUTPUT_DIR: ${{ github.workspace }}/output
+  CI_DIR: ${{ github.workspace }}/release/ci
+  SCONS_CACHE_DIR: ${{ github.workspace }}/release/ci/scons_cache
+  SOURCE_BRANCH: ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Flat branch to publish (default: source branch with / -> -)"
+        required: false
+        type: string
+
+jobs:
+  guard:
+    # Resolve the flat target branch and refuse to flatten a branch onto itself.
+    runs-on: ubuntu-24.04
+    outputs:
+      target_branch: ${{ steps.resolve.outputs.target_branch }}
+    steps:
+      - name: Resolve and check target branch
+        id: resolve
+        run: |
+          TARGET="${{ inputs.target_branch }}"
+          if [ -z "$TARGET" ]; then
+            TARGET="${SOURCE_BRANCH//\//-}"
+          fi
+          if [ "$TARGET" = "$SOURCE_BRANCH" ]; then
+            echo "::error::resolved target '$TARGET' equals the source branch. Pass target_branch explicitly."
+            exit 1
+          fi
+          echo "target_branch=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "cutting $TARGET from $SOURCE_BRANCH"
+
+  build:
+    needs: [ guard ]
+    runs-on: [ self-hosted, tici ]
+    concurrency:
+      group: zoompilot-prebuilt-manual-${{ github.ref_name }}
+      cancel-in-progress: false
+    outputs:
+      version: ${{ steps.set-env.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ env.SOURCE_BRANCH }}
+      - run: git lfs pull
+
+      - name: Cache SCons
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SCONS_CACHE_DIR }}
+          key: scons-manual-${{ runner.os }}-${{ runner.arch }}-${{ env.SOURCE_BRANCH }}-${{ github.sha }}
+          restore-keys: |
+            scons-manual-${{ runner.os }}-${{ runner.arch }}-${{ env.SOURCE_BRANCH }}
+            scons-manual-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Set environment variables
+        id: set-env
+        run: |
+          echo "version=$(date '+%Y.%m.%d')-${{ github.run_number }}" >> $GITHUB_OUTPUT
+          source /etc/profile
+          export UV_PROJECT_ENVIRONMENT=${HOME}/venv
+          export UV_PYTHON_PREFERENCE=managed
+          export UV_PYTHON_INSTALL_DIR=${HOME}/uv/python
+          export VIRTUAL_ENV=$UV_PROJECT_ENVIRONMENT
+          uv sync
+          printenv >> $GITHUB_ENV
+
+      - name: Setup build environment
+        run: |
+          # BUILD_DIR is the CI copy bind-mounted over /data/openpilot inside the
+          # runner service's private mount namespace, not the real install.
+          mkdir -p "${BUILD_DIR}/"
+          sudo find $BUILD_DIR/ -mindepth 1 -delete
+          source ${UV_PROJECT_ENVIRONMENT}/bin/activate
+          PYTHONPATH=$PYTHONPATH:${{ github.workspace }}/ ${{ github.workspace }}/scripts/manage-powersave.py --disable
+
+      - name: Build
+        run: |
+          export PYTHONPATH="$BUILD_DIR"
+          ./tools/release/release_files.py | sort | uniq | rsync -rRl${RUNNER_DEBUG:+v} --files-from=- . $BUILD_DIR/
+          cd $BUILD_DIR
+          ln -sfn msgq_repo/msgq msgq
+          ln -sfn opendbc_repo/opendbc opendbc
+          ln -sfn rednose_repo/rednose rednose
+          ln -sfn teleoprtc_repo/teleoprtc teleoprtc
+          ln -sfn tinygrad_repo/tinygrad tinygrad
+          sed -i '/from .board.jungle import PandaJungle, PandaJungleDFU/s/^/#/' panda/__init__.py
+          scons -j$(nproc) cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal openpilot/sunnypilot/modeld_v2
+          scons -j2 cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal openpilot/sunnypilot/selfdrive/locationd
+          scons -j1 cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal openpilot/selfdrive/locationd
+          scons -j$(nproc) cache_dir=${{ env.SCONS_CACHE_DIR }} --minimal
+          touch ${BUILD_DIR}/prebuilt
+
+      - name: Prepare output
+        run: |
+          sudo rm -rf ${OUTPUT_DIR}
+          mkdir -p ${OUTPUT_DIR}
+          rsync -am${RUNNER_DEBUG:+v} \
+            --exclude='.sconsign.dblite' \
+            --exclude='*.a' \
+            --exclude='*.o' \
+            --exclude='*.os' \
+            --exclude='*.pyc' \
+            --exclude='moc_*' \
+            --exclude='__pycache__' \
+            --exclude='Jenkinsfile' \
+            --exclude='**/release/' \
+            --exclude='**/.github/' \
+            --exclude='**/openpilot/selfdrive/ui/replay/' \
+            --exclude='**/__pycache__/' \
+            --exclude='${{ env.SCONS_CACHE_DIR }}' \
+            --exclude='**/.git/' \
+            --exclude='**/SConstruct' \
+            --exclude='**/SConscript' \
+            --exclude='**/.venv/' \
+            --exclude='openpilot/selfdrive/modeld/models/*.onnx*' \
+            --exclude='openpilot/sunnypilot/modeld*/models/*.onnx*' \
+            --exclude='openpilot/third_party/*x86*' \
+            --exclude='openpilot/third_party/*Darwin*' \
+            --delete-excluded \
+            --chown=comma:comma \
+            ${BUILD_DIR}/ ${OUTPUT_DIR}/
+
+      - name: Tar.gz files
+        run: tar czf prebuilt.tar.gz -C ${{ env.OUTPUT_DIR }} .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt
+          path: prebuilt.tar.gz
+
+      - name: Re-enable powersave
+        if: always()
+        run: |
+          source ${UV_PROJECT_ENVIRONMENT}/bin/activate
+          PYTHONPATH=$PYTHONPATH:${{ github.workspace }}/ ${{ github.workspace }}/scripts/manage-powersave.py --enable
+
+  publish:
+    needs: [ guard, build ]
+    if: ${{ success() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: zoompilot-publish-manual-${{ needs.guard.outputs.target_branch }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: prebuilt
+
+      - name: Untar prebuilt
+        run: |
+          mkdir -p ${{ env.OUTPUT_DIR }}
+          tar xzf prebuilt.tar.gz -C ${{ env.OUTPUT_DIR }}
+
+      - name: Configure git
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: Publish to ${{ needs.guard.outputs.target_branch }}
+        run: |
+          ${{ env.CI_DIR }}/publish.sh \
+            "${{ github.workspace }}" \
+            "${{ env.OUTPUT_DIR }}" \
+            "${{ needs.guard.outputs.target_branch }}" \
+            "${{ needs.build.outputs.version }}" \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            "prebuilt"
