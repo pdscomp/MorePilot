@@ -77,16 +77,19 @@ bytes above. Do not "fix" the DBC value to the wire bytes — the packer handles
 
 ### Torque limits (must be enforced in software AND panda)
 
-| Limit | Value | Notes |
+| Limit | Value (base / 2022+ EPS) | Notes |
 |-------|-------|-------|
-| `STEER_MAX` | 600 | symmetric ± |
-| `STEER_DELTA_UP` | 6 per 10 ms | slow wind-up (+600/s) |
-| `STEER_DELTA_DOWN` | 15 per 10 ms | fast release (−1500/s) |
-| `STEER_MAX_RT_DELTA` | 192 | real-time ramp ceiling |
+| `STEER_MAX` | 600 / 1200 ≤ ~32 mph, 800 above | symmetric ±; 2022+ EPS uses `STEER_MAX_LOOKUP` ([0, 14.2, 14.5] m/s → [1200, 1200, 800]), matching the stock tune — the EPS clips injected torque past its per-speed ceiling either way |
+| `STEER_DELTA_UP` | 6 / 12 per 10 ms | wind-up; 12 = EPS hardware rate limit |
+| `STEER_DELTA_DOWN` | 15 / 25 per 10 ms | fast release |
+| `STEER_MAX_RT_DELTA` | 192 / 384 | real-time ramp ceiling |
 | `STEER_RT_INTERVAL_NS` | 250 000 000 | rt reference window (250 ms) |
 | `STEER_DRIVER_ALLOWANCE` | 15 | driver override headroom |
 | `STEER_DRIVER_MULTIPLIER` | 40 | driver torque influence |
 | `STEER_DRIVER_FACTOR` | 1 | |
+
+The 2022+ EPS values are gated on `MazdaFlags.STEER_TO_ZERO` (EPS firmware identity), exactly like
+the stock-path tune; older EPS stays on the conservative base envelope.
 
 Distinct from the camera path (±800, up 10 / down 25). Panda enforces the same numbers
 independently; openpilot must stay inside them or panda blocks the frame.
@@ -164,9 +167,10 @@ Every frame, in addition to the normal camera-path `CAM_LKAS`:
 
 - If `CP.flags & TORQUE_INTERCEPTOR`:
   - When `CC.latActive and CS.ti_lkas_allowed`:
-    `ti_new_torque = round(CC.actuators.torque * TorqueInterceptorControllerParams.STEER_MAX)`,
+    `ti_new_torque = round(CC.actuators.torque * ti_steer_max)` (speed-interpolated via
+    `STEER_MAX_LOOKUP` on the 2022+ EPS, flat `STEER_MAX` otherwise),
     then `apply_driver_steer_torque_limits(...)` against `CS.out.steeringTorque`
-    (which is the TI sensor in TI mode), then the rt delta clamp (192 per 250 ms window).
+    (which is the TI sensor in TI mode), then the rt delta clamp (192 or 384 per 250 ms window).
   - Otherwise torque 0 and reset the rt limiter state.
   - Append `create_ti_steering_control(packer, ti_apply_torque)` **every frame** —
     engaged or not. The stream must never stop while TI mode is on.
@@ -236,8 +240,9 @@ bool valid = (addr == 0x24A) && (bus == MAZDA_AUX) &&
    - violation if: `!mazda_ti`, high nibble of byte 0 or 2 set, duplicate field ≠
      request field, or key bytes ≠ `C4 61 CE 60`
    - torque checks: if `(controls_allowed || controls_allowed_lateral) &&
-     feedback_fresh` → enforce max 600,
-     driver-limit (allowance 15 / multiplier 40, rate 6/15), rt delta 192 over the
+     feedback_fresh` → enforce max 1200 (looser backstop; the controller self-caps
+     per EPS: 600 flat on older EPS, 1200/800 speed-tapered on 2022+),
+     driver-limit (allowance 15 / multiplier 40, rate 12/25), rt delta 384 over the
      standard `MAX_RT_INTERVAL`; else **any nonzero torque is a violation**
    - any violation → block the frame and reset TI torque state
 5. **Forwarding**: block 0x249 relay between camera and main buses both directions
