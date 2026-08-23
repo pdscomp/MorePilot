@@ -79,7 +79,7 @@ bytes above. Do not "fix" the DBC value to the wire bytes — the packer handles
 
 | Limit | Value (base / 2022+ EPS) | Notes |
 |-------|-------|-------|
-| `STEER_MAX` | 600 / 1200 ≤ ~32 mph, 800 above | symmetric ±; 2022+ EPS uses `STEER_MAX_LOOKUP` ([0, 14.2, 14.5] m/s → [1200, 1200, 800]), matching the stock tune — the EPS clips injected torque past its per-speed ceiling either way |
+| `STEER_MAX` | 600 (all EPS) | symmetric ±; **do not raise** — the TI DAC output stage self-protects above ~600 (drops to STATE=OFF + VIOL=0x11, latched ~30 s). First-drive 2026-08-22: 9 cutouts, every at-speed entry preceded by \|cmd\| >600 in the prior 3 s; none without. The zoompilot 1200/800 envelope is an EPS-path spec and does not port to TI hardware |
 | `STEER_DELTA_UP` | 6 / 12 per 10 ms | wind-up; 12 = EPS hardware rate limit |
 | `STEER_DELTA_DOWN` | 15 / 25 per 10 ms | fast release |
 | `STEER_MAX_RT_DELTA` | 192 / 384 | real-time ramp ceiling |
@@ -240,8 +240,8 @@ bool valid = (addr == 0x24A) && (bus == MAZDA_AUX) &&
    - violation if: `!mazda_ti`, high nibble of byte 0 or 2 set, duplicate field ≠
      request field, or key bytes ≠ `C4 61 CE 60`
    - torque checks: if `(controls_allowed || controls_allowed_lateral) &&
-     feedback_fresh` → enforce max 1200 (looser backstop; the controller self-caps
-     per EPS: 600 flat on older EPS, 1200/800 speed-tapered on 2022+),
+     feedback_fresh` → enforce max 600 (TI hardware ceiling — past ~600 the DAC
+     stage latches OFF + VIOL=0x11 for ~30 s),
      driver-limit (allowance 15 / multiplier 40, rate 12/25), rt delta 384 over the
      standard `MAX_RT_INTERVAL`; else **any nonzero torque is a violation**
    - any violation → block the frame and reset TI torque state
