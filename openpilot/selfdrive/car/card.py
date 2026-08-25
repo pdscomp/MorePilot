@@ -102,6 +102,11 @@ class Car:
 
       alpha_long_allowed = self.params.get_bool("AlphaLongitudinalEnabled")
 
+      # TEMPORARY (zoom-cx8): force real FW fingerprinting every boot to collect CX-8 firmware
+      # versions — clears the forced platform selection and the cached CarParams so the query
+      # always runs. REMOVE once the CX-8 FW_VERSIONS entry lands.
+      self.params.remove("CarPlatformBundle")
+      self.params.remove("CarParamsCache")
       cached_params = None
       cached_params_raw = self.params.get("CarParamsCache")
       if cached_params_raw is not None:
