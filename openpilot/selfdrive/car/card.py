@@ -9,6 +9,7 @@ from openpilot.cereal import log, custom
 from opendbc.car.structs import car
 
 from openpilot.common.params import Params
+from openpilot.common.api.backend import enable_ti
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
 
@@ -107,6 +108,10 @@ class Car:
       # always runs. REMOVE once the CX-8 FW_VERSIONS entry lands.
       self.params.remove("CarPlatformBundle")
       self.params.remove("CarParamsCache")
+      # TEMPORARY (zoom-cx8): force TI on via the canonical interlocked enable path so the
+      # data-collection branch always drives with the interceptor. REMOVE with the block above.
+      if not self.params.get_bool("TorqueInterceptorEnabled"):
+        enable_ti(self.params)
       cached_params = None
       cached_params_raw = self.params.get("CarParamsCache")
       if cached_params_raw is not None:
