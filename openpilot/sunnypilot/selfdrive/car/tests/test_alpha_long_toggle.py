@@ -74,6 +74,26 @@ class TestAlphaLongToggleMonitor:
     cc_sp = _step(m, enabled=True)
     assert cc_sp.stockEcuHandBack
 
+  def test_handback_stays_asserted_after_done(self):
+    # CC_SP is rebuilt each frame; dropping the assert once done latched made the session
+    # manager read a withdrawal and re-silence the radar it had just handed back, right
+    # before shutdown
+    m, params = _monitor(toggle=False, op_long=True)
+    _step(m)
+    _step(m, acc_faulted=True)
+    assert params.get_bool("OnroadCycleRequested")
+    for _ in range(10):
+      cc_sp = _step(m, acc_faulted=True)
+      assert cc_sp.stockEcuHandBack
+
+  def test_no_assert_after_done_when_nothing_was_handed_back(self):
+    # the enable direction never starts a hand-back, so there is nothing to keep asserting
+    m, params = _monitor(toggle=True, op_long=False)
+    _step(m)
+    assert params.get_bool("OnroadCycleRequested")
+    cc_sp = _step(m)
+    assert not cc_sp.stockEcuHandBack
+
   def test_non_mazda_disable_cycles_immediately(self):
     m, params = _monitor(toggle=False, brand="toyota", op_long=True)
     cc_sp = _step(m)

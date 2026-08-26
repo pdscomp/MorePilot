@@ -26,7 +26,11 @@ which the timeout below outwaits.
 from opendbc.car import DT_CTRL, structs
 from openpilot.common.params import Params
 
-HANDBACK_TIMEOUT_T = 8.0  # seconds, past the radar's ~5 s S3 self-recovery
+# Seconds before the monitor stops waiting on the radar's return and takes the action anyway;
+# past the radar's ~5 s S3 self-recovery. The session manager keeps its own 10 s budget on the
+# HANDBACK state, and the hand-back stays asserted after done (below), so firing this does not
+# abandon the default-session request -- it only decides when the cycle/offroad grant happens.
+HANDBACK_TIMEOUT_T = 8.0
 HANDBACK_TIMEOUT_FRAMES = int(HANDBACK_TIMEOUT_T / DT_CTRL)
 
 
@@ -64,6 +68,12 @@ class AlphaLongToggleMonitor:
   def update(self, CS: structs.CarState, CC: structs.CarControl, CC_SP: structs.CarControlSP) -> None:
     """Runs at 100 Hz from controls_update, before CI.apply."""
     if self.done:
+      # CC_SP is rebuilt every frame, so a hand-back that ran must stay asserted until the
+      # process exits: the session manager reads a dropped assert as a withdrawal, falls back
+      # to stock, and would re-silence the radar it just handed back (the manager latches
+      # against that too; this is the belt to its braces)
+      if self.handback_frames > 0:
+        CC_SP.stockEcuHandBack = True
       return
     toggle_mismatch = self.CP.alphaLongitudinalAvailable and self.toggle_enabled != self.CP.openpilotLongitudinalControl
     if not toggle_mismatch and not self.offroad_requested:
