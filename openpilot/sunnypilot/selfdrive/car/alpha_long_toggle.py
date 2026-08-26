@@ -69,9 +69,12 @@ class AlphaLongToggleMonitor:
     """Runs at 100 Hz from controls_update, before CI.apply."""
     if self.done:
       # CC_SP is rebuilt every frame, so a hand-back that ran must stay asserted until the
-      # process exits: the session manager reads a dropped assert as a withdrawal, falls back
-      # to stock, and would re-silence the radar it just handed back (the manager latches
-      # against that too; this is the belt to its braces)
+      # process exits: the session manager reads a dropped assert as a withdrawal and would
+      # re-silence the radar it just handed back. This is the producer's side of the contract
+      # and it is load-bearing -- the timeout above sits inside the manager's 10 s session
+      # budget, so only a held assert lets a slow hand-back finish instead of reading as
+      # withdrawn. (The manager also latches a completed hand-back as a backstop for a
+      # producer that stops asserting.)
       if self.handback_frames > 0:
         CC_SP.stockEcuHandBack = True
       return
