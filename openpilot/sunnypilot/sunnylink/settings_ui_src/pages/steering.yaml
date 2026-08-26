@@ -244,6 +244,41 @@ sections:
       # options injected like TorqueControlTune's
       enablement:
       - $ref: '#/macros/offroad'
+    - key: TorqueTuneV2PredictiveTurnIn
+      widget: toggle
+      title: Predictive Turn-In (Alpha)
+      description: Starts steering into curves slightly earlier by anticipating the planned steering,
+        compensating for the car's steering response delay. Only available with the v2.0 tune.
+        Takes effect on the next drive.
+      visibility:
+      - type: all
+        conditions:
+        - type: param
+          key: EnforceTorqueControl
+          equals: true
+        - type: any
+          conditions:
+          - type: param
+            key: TorqueControlTune
+            equals: 2.0
+          - type: param
+            key: TorqueControlTuneBig
+            equals: 2.0
+      enablement:
+      - type: all
+        conditions:
+        - type: param
+          key: EnforceTorqueControl
+          equals: true
+        - type: any
+          conditions:
+          - type: param
+            key: TorqueControlTune
+            equals: 2.0
+          - type: param
+            key: TorqueControlTuneBig
+            equals: 2.0
+        - $ref: '#/macros/offroad'
 - id: lane_change
   title: Lane Change
   description: Automatic lane change timing and behavior

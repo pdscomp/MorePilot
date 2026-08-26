@@ -9,7 +9,7 @@ import pyray as rl
 
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import (TUNE_PARAM_BY_SIZE, jerk_aware_has_effect, label_for,
-                                                                      stored_tune_versions, versions_by_label)
+                                                                      resolved_tune_versions, stored_tune_versions, versions_by_label)
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.lib.utils import NoElideButtonAction
@@ -49,6 +49,13 @@ class TorqueSettingsLayout(Widget):
       True: tune_row(True, tr("Torque Control Tune Version (Big Models)"),
                      tr("Select the version of Torque Control Tune to use while a big model is driving.")),
     }
+    self._predictive_toggle = toggle_item_sp(
+      param="TorqueTuneV2PredictiveTurnIn",
+      title=lambda: tr("Predictive Turn-In (Alpha)"),
+      description=lambda: tr("Starts steering into curves slightly earlier by anticipating the planned steering, " +
+                             "compensating for the car's steering response delay. Only available with the v2.0 tune. " +
+                             "Takes effect on the next drive."),
+    )
     self._self_tune_toggle = toggle_item_sp(
       param="LiveTorqueParamsToggle",
       title=lambda: tr("Self-Tune"),
@@ -100,6 +107,7 @@ class TorqueSettingsLayout(Widget):
     items = [
       self._jerk_aware_toggle,
       *self._tune_rows.values(),
+      self._predictive_toggle,
       self._self_tune_toggle,
       self._relaxed_tune_toggle,
       self._custom_tune_toggle,
@@ -115,6 +123,10 @@ class TorqueSettingsLayout(Widget):
     # v2 tune replaces the jerk-aware mechanisms and forces the controller off, so the
     # toggle is disabled while v2 is the tune every model size will actually run
     self._jerk_aware_toggle.action_item.set_enabled(ui_state.is_offroad() and not nnlc_enabled and jerk_aware_has_effect(ui_state.params))
+    # predictive turn-in is a v2-only mechanism: hidden unless some model size will actually run v2
+    v2_runs = any(v == 2.0 for v in resolved_tune_versions(ui_state.params).values())
+    self._predictive_toggle.set_visible(v2_runs)
+    self._predictive_toggle.action_item.set_enabled(ui_state.is_offroad())
     if not ui_state.params.get_bool("LiveTorqueParamsToggle"):
       ui_state.params.remove("LiveTorqueParamsRelaxedToggle")
       self._relaxed_tune_toggle.action_item.set_state(False)
