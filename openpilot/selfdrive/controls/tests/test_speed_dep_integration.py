@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from unittest.mock import MagicMock, patch  # noqa: TID251
-from opendbc.sunnypilot.car.interfaces import get_speed_dep_config
+from opendbc.sunnypilot.car.interfaces import get_speed_dep_config, get_speed_dep_config_for_car
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_override import LatControlTorqueExtOverride
 
@@ -193,6 +193,40 @@ class TestManualOverridePriority:
       "Manual latAccelFactor should overwrite speed-dep"
     assert tp.friction == pytest.approx(25.0, abs=0.1), \
       "Manual friction should overwrite speed-dep"
+
+  def test_manual_wins_every_frame(self):
+    """The manual override must own the params on EVERY frame, not just the 3 s poll
+    frame — the per-frame speed-dep interpolation used to out-write it 299/300 frames."""
+    ovr = make_override(enforce=True, manual_override=True,
+                        manual_lat_accel_factor='350', manual_friction='25')
+    activate_speed_dep(ovr)
+    ovr._last_vego = 15.0
+
+    tp = TorqueParams()
+    for frame in range(10):
+      ovr.update_override_torque_params(tp)
+      assert tp.latAccelFactor == pytest.approx(350.0), f"speed-dep out-wrote manual on frame {frame}"
+      assert tp.friction == pytest.approx(25.0), f"speed-dep out-wrote manual friction on frame {frame}"
+
+  def test_manual_toggle_off_mid_drive_returns_to_speed_dep(self):
+    """Flipping the override off mid-drive hands the params back to speed-dep at the
+    next 3 s poll."""
+    ovr = make_override(enforce=True, manual_override=True,
+                        manual_lat_accel_factor='350', manual_friction='25')
+    activate_speed_dep(ovr)
+    ovr._last_vego = 15.0
+
+    tp = TorqueParams()
+    ovr.update_override_torque_params(tp)
+    assert tp.latAccelFactor == pytest.approx(350.0)
+
+    ovr.params.get_bool.side_effect = lambda k: {'EnforceTorqueControl': True,
+                                                 'TorqueParamsOverrideEnabled': False}.get(k, False)
+    for _ in range(301):  # crosses the next poll frame
+      ovr.update_override_torque_params(tp)
+
+    expected_factor = float(np.interp(15.0, SAMPLE_SPEED_BP, SAMPLE_LAT_ACCEL_FACTOR_BP))
+    assert tp.latAccelFactor == pytest.approx(expected_factor, abs=1e-4)
 
   def test_speed_dep_used_when_manual_off(self):
     ovr = make_override(enforce=True, manual_override=False)
@@ -458,6 +492,7 @@ class TestUpdateSpeedDepTorqueFallback:
 
   @patch(PATCH_GET_SPEED_DEP_CONFIG)
   def test_empty_bins_deactivate(self, mock_get_config):
+    """Empty bins route through the single deactivation path (CP-tune restore included)."""
     mock_get_config.return_value = {}
     mock_self = self._make_mock_self()
     mock_self._speed_dep_active = True
@@ -467,7 +502,80 @@ class TestUpdateSpeedDepTorqueFallback:
 
     LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
 
+    mock_self.disable_speed_dep_torque.assert_called_once()
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_use_params_off_deactivates(self, mock_get_config):
+    """useParams flipping off mid-drive (manual override enabled) routes through the
+    same deactivation path even with bins still present."""
+    mock_get_config.return_value = {}
+    mock_self = self._make_mock_self()
+    mock_self._speed_dep_active = True
+
+    mock_tp = MagicMock()
+    mock_tp.useParams = False
+    mock_tp.speedBinCenters = [6.5, 10.0]
+
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
+
+    mock_self.disable_speed_dep_torque.assert_called_once()
+
+  def test_disable_speed_dep_restores_cp_tune(self):
+    """Mid-drive de-assert (useParams flipped off): the controller must return to the
+    CP tune instead of keeping the last interpolated values forever."""
+    mock_self = self._make_mock_self()
+    mock_self._speed_dep_active = True
+    tune = mock_self.CP.lateralTuning.torque
+    tune.latAccelFactor = 2.5
+    tune.latAccelOffset = 0.05
+    tune.friction = 0.12
+
+    LatControlTorqueExt.disable_speed_dep_torque(mock_self)
+
     assert mock_self._speed_dep_active is False
+    assert mock_self.lac_torque.torque_params.latAccelFactor == 2.5
+    assert mock_self.lac_torque.torque_params.latAccelOffset == 0.05
+    assert mock_self.lac_torque.torque_params.friction == 0.12
+    mock_self.lac_torque.update_limits.assert_called_once()
+
+  def test_disable_speed_dep_noop_when_inactive(self):
+    mock_self = self._make_mock_self()
+    LatControlTorqueExt.disable_speed_dep_torque(mock_self)
+    mock_self.lac_torque.update_limits.assert_not_called()
+
+
+class TestSeedValidityGate:
+  """Entries measured on a steer-to-zero EPS declare requires_steer_to_zero and must not
+  apply to the same model with its stock EPS (different STEER_MAX schedule → mis-scaled LAF)."""
+
+  @staticmethod
+  def _cp(fingerprint, min_steer_speed):
+    from types import SimpleNamespace
+    return SimpleNamespace(carFingerprint=fingerprint, minSteerSpeed=min_steer_speed)
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_flagged_entry_suppressed_on_stock_eps(self, mock_get_config):
+    mock_get_config.return_value = {'SWAP_CAR': {'requires_steer_to_zero': True, 'speed_bp': [10.0]}}
+    assert get_speed_dep_config_for_car(self._cp('SWAP_CAR', 12.5)) == {}
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_flagged_entry_applies_with_swap_eps(self, mock_get_config):
+    cfg = {'requires_steer_to_zero': True, 'speed_bp': [10.0]}
+    mock_get_config.return_value = {'SWAP_CAR': cfg}
+    assert get_speed_dep_config_for_car(self._cp('SWAP_CAR', 0.0)) == cfg
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_unflagged_entry_applies_regardless(self, mock_get_config):
+    cfg = {'speed_bp': [10.0]}
+    mock_get_config.return_value = {'PLAIN_CAR': cfg}
+    assert get_speed_dep_config_for_car(self._cp('PLAIN_CAR', 12.5)) == cfg
+
+  def test_real_toml_flags_are_as_intended(self):
+    """CX-9 2021 seeds were measured on an EPS-swapped car and must carry the flag;
+    the CX-5 2022 seeds were measured on the stock (steer-to-zero) EPS and must not."""
+    cars = get_speed_dep_config()
+    assert cars['MAZDA_CX9_2021'].get('requires_steer_to_zero') is True
+    assert 'requires_steer_to_zero' not in cars['MAZDA_CX5_2022']
 
 
 class TestExtrapolationAtBoundaries:
