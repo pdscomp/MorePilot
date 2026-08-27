@@ -41,7 +41,6 @@ class ControlsExt(ModelStateBase, ControlsLateralZP):
   def pcm_cruise_speed(self) -> bool:
     """CarParamsSP.pcmCruiseSpeed as card has it this frame: False while ICBM drives the set speed."""
     return not icbm_active(self.sm['carStateSP'], self.CP_SP)
-
   def get_params_sp(self, sm: messaging.SubMaster) -> None:
     if time.monotonic() - self._param_update_time > PARAMS_UPDATE_PERIOD:
       self.blinker_pause_lateral.get_params()

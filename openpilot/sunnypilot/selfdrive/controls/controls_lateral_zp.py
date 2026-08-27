@@ -47,6 +47,16 @@ class ControlsLateralZP:
     """One controller per model size, built once; every drive starts on the small model's."""
     # the enforce-off v0 forcing and the unset-param defaults both live in the resolver,
     # shared with the settings UIs so they gate on the tune that will actually run
+    # TI cars default to tune v2, plus the torque-control enforcement the version
+    # resolution hangs off of (without it every Mazda is pinned to v0 below).
+    # Seeds fire only while the param is UNSET - an explicit user pick (including
+    # enforce-off, or any tune version) is a set param and always persists.
+    if self.params.get_bool("TorqueInterceptorEnabled"):
+      if self.params.get("EnforceTorqueControl") is None:
+        self.params.put_bool("EnforceTorqueControl", True, block=True)
+      if self.params.get("TorqueControlTune") is None:
+        self.params.put("TorqueControlTune", 2.0, block=True)
+
     versions = resolved_tune_versions(self.params, self.CP.lateralTuning.which() == 'torque')
 
     def build(version):
