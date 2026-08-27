@@ -110,15 +110,6 @@ class Car:
           cached_params = _cached_params
 
       fixed_fingerprint = (self.params.get("CarPlatformBundle") or {}).get("platform", None)
-      # zoom-cx8: a reinstall/reset loses TorqueInterceptorEnabled, and without it _initialize_mazda
-      # applies no TI flag (flags=1), hiding all TI settings. The CX-8 always has the interceptor,
-      # so when the last-known platform is the CX-8, re-enable TI via the canonical interlocked path.
-      # Must run before initialize_params so the TI flag applies this same boot.
-      # Remove if TI enablement ever survives reinstalls (persisted across /data wipes).
-      cached_platform = fixed_fingerprint or (cached_params.carFingerprint if cached_params is not None else None)
-      if cached_platform == "MAZDA_CX8_2022" and not self.params.get_bool("TorqueInterceptorEnabled"):
-        cloudlog.info("card: CX-8 platform cached, force-enabling torque interceptor")
-        enable_ti(self.params)
       init_params_list_sp = sunnypilot_interfaces.initialize_params(self.params)
 
       self.CI = get_car(*self.can_callbacks, obd_callback(self.params), alpha_long_allowed, is_release, cached_params,
@@ -127,6 +118,12 @@ class Car:
       self.RI = interfaces[self.CI.CP.carFingerprint].RadarInterface(self.CI.CP, self.CI.CP_SP)
       self.CP = self.CI.CP
       self.CP_SP = self.CI.CP_SP
+
+      # zoom-cx8: _initialize_mazda treats the CX-8's interceptor as intrinsic; persist that so the
+      # UI toggle, sunnylink, and the lateral-tune seed agree with what the car is actually running.
+      if self.CP.carFingerprint == "MAZDA_CX8_2022" and not self.params.get_bool("TorqueInterceptorEnabled"):
+        cloudlog.info("card: CX-8 fingerprinted, persisting torque interceptor enablement")
+        enable_ti(self.params)
 
       # continue onto next fingerprinting step in pandad
       self.params.put_bool("FirmwareQueryDone", True, block=True)
