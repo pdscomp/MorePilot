@@ -271,6 +271,7 @@ class TestTorqueTuneTiSeed:
 
   def test_ti_off_unset_seeds_nothing(self, ctx):
     params, controls = ctx
+    params.remove("EnforceTorqueControl")  # the fixture sets it; this test needs it genuinely unset
     assert select(controls) == V0
     assert params.get("TorqueControlTune") is None
     assert params.get("EnforceTorqueControl") is None
