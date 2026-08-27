@@ -66,13 +66,17 @@ class SteeringLayoutMici(NavScroller):
     self._nnlc_toggle = BigParamControlSP(tr("nnlc"), "NeuralNetworkLateralControl",
                                           description=tr("Neural Network Lateral Control.\n" +
                                                          "Steers with a neural network instead of the torque controller."))
+    # steers through slow signaled turns; blinker pause suppresses lateral in exactly that
+    # regime, so the pause wins and this reads off while it is enabled (param kept)
+    self._turn_assist_toggle = BigParamControlSP(tr("low speed") + "\n" + tr("turn assist"), "LowSpeedTurnAssist",
+                                                 depends_on=lambda: not self._blinker_pause_on)
 
     for btn in [self._mads_settings_btn, self._lane_change_btn, self._blinker_settings_btn, self._torque_settings_btn]:
       btn.set_subtitle_font_size(24)
 
     self._scroller.add_widgets([
       self._mads_settings_btn, self._lane_change_btn,
-      self._blinker_settings_btn,
+      self._blinker_settings_btn, self._turn_assist_toggle,
       self._torque_settings_btn, self._nnlc_toggle,
     ])
 
@@ -248,7 +252,8 @@ class SteeringLayoutMici(NavScroller):
         badges.append((tr("tja"), _on_off(ui_state.params.get_bool("MazdaTjaButton"))))
       self._mads_settings_btn.set_badges(badges)
 
-    blinker_on = ui_state.params.get_bool("BlinkerPauseLateralControl")
+    blinker_on = self._blinker_pause_on = ui_state.params.get_bool("BlinkerPauseLateralControl")
+    self._turn_assist_toggle.refresh()
     if not blinker_on:
       self._blinker_settings_btn.set_disabled()
     else:

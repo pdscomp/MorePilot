@@ -147,7 +147,7 @@ class Controls(ControlsExt):
       new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
     else:
       new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
-    new_desired_curvature = self.lane_change_curvature(self.sm, CC.latActive, CS.vEgo, new_desired_curvature, self.desired_curvature)
+    new_desired_curvature = self.lane_change_curvature(self.sm, CC.latActive, CS.vEgo, new_desired_curvature, self.desired_curvature, self.curvature)
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     # self.lat_delay honors LagdToggle: live lagd estimate when on, the fixed CP-derived total when off
     lat_delay = self.lat_delay + LAT_SMOOTH_SECONDS

@@ -122,7 +122,8 @@ class ControlsLateralZP:
     self._applied_torque_prev = applied
 
   def lane_change_curvature(self, sm: messaging.SubMaster, lat_active: bool, v_ego: float,
-                            new_desired_curvature: float, prev_desired_curvature: float) -> float:
+                            new_desired_curvature: float, prev_desired_curvature: float,
+                            current_curvature: float | None = None) -> float:
     """new_desired_curvature held to lane-change smoothing's curvature rate, for upstream's
     clip_curvature to take (unchanged outside a smoothed lane change). The lateral maneuver
     mode's scripted commands pass through the stock clip. Called once a frame with
@@ -132,6 +133,10 @@ class ControlsLateralZP:
       # a lane-change unwind armed before maneuver mode must not resume stale after it
       self.lane_change_smoothing.reset()
       return new_desired_curvature
+    # the low-speed turn assist shapes the request before the pace clamp, on cars that have it
+    turn_assist = getattr(self, 'turn_assist', None)
+    if turn_assist is not None and current_curvature is not None:
+      new_desired_curvature = turn_assist.update(sm['carState'], lat_active, sm['modelV2'], new_desired_curvature, current_curvature)
     jerk_factor = self.lane_change_smoothing.update(sm['carState'], sm['modelV2'], lat_active, new_desired_curvature, prev_desired_curvature)
     return clip_curvature_rate(v_ego, prev_desired_curvature, new_desired_curvature, jerk_factor)
 

@@ -103,6 +103,15 @@ sections:
       - type: param
         key: BlinkerPauseLateralControl
         equals: true
+  - key: LowSpeedTurnAssist
+    widget: toggle
+    title: Low-Speed Turn Assist
+    description: Steer through slow, signaled turns; hold the wheel wound at intersections and start turning on time instead
+      of going wide. Active below 10 mph with the turn signal on. Unavailable while lateral control is paused on blinker.
+    enablement:
+    - type: param
+      key: BlinkerPauseLateralControl
+      equals: false
 - id: torque
   title: Torque Control
   description: Steering torque tuning and lateral control method

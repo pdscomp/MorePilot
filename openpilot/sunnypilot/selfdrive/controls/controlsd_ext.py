@@ -57,6 +57,7 @@ def lateral_extension_of(lac):
   if ext._jerk_aware_enabled:
     return custom.LateralExtension.jerkAware
   return custom.LateralExtension.none
+from openpilot.sunnypilot.selfdrive.controls.lib.turn_assist import TurnAssistController
 
 
 class ControlsExt(ModelStateBase, ControlsLateralZP):
@@ -71,6 +72,7 @@ class ControlsExt(ModelStateBase, ControlsLateralZP):
       self.lat_delay = get_fixed_lat_delay(params, CP.steerActuatorDelay)
     self._param_update_time: float = 0.0
     self.blinker_pause_lateral = BlinkerPauseLateral()
+    self.turn_assist = TurnAssistController(CP)
     ControlsLateralZP.__init__(self, CP)
 
     cloudlog.info("controlsd_ext is waiting for CarParamsSP")
@@ -88,6 +90,7 @@ class ControlsExt(ModelStateBase, ControlsLateralZP):
   def get_params_sp(self, sm: messaging.SubMaster) -> None:
     if time.monotonic() - self._param_update_time > PARAMS_UPDATE_PERIOD:
       self.blinker_pause_lateral.get_params()
+      self.turn_assist.get_params()
       self.lane_change_smoothing.get_params()
 
       if self.CP.lateralTuning.which() == 'torque':
@@ -152,6 +155,9 @@ class ControlsExt(ModelStateBase, ControlsLateralZP):
     CC_SP.intelligentCruiseButtonManagement.vTarget = icbm_src.vTarget
     CC_SP.zoompilot.icbmHold = sm['selfdriveStateSP'].zoompilot.icbmHold
 
+    # lateral assist telemetry, for offline validation of the turn hold and pace clamp
+    CC_SP.turnAssist.holdCurvature = float(self.turn_assist.hold)
+    CC_SP.turnAssist.leadCurvature = float(self.turn_assist.lead_applied)
     # lane-change pace clamp telemetry, for offline validation
     CC_SP.zoompilot.laneChangeSmoothing.jerkFactor = float(self.lane_change_smoothing.jerk_factor)
 
