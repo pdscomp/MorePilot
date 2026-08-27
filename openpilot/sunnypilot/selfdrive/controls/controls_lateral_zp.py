@@ -147,6 +147,8 @@ class ControlsLateralZP:
                      float(np.interp(v_ego, bp, up)), float(np.interp(v_ego, bp, down)),
                      rail_scale, self.steer_limited_by_safety, ext.last_error, ext.integrator)
     self.steer_limited_by_safety = limit.limited
+    if hasattr(ext, 'set_actuator_state'):
+      ext.set_actuator_state(applied, limit.at_rail)
     self._applied_torque_prev = applied
 
   def lane_change_curvature(self, sm: messaging.SubMaster, lat_active: bool, v_ego: float,
@@ -158,7 +160,11 @@ class ControlsLateralZP:
     CC.latActive, which select_lateral_control waits on."""
     self.note_lat_active(lat_active)
     if sm.valid['lateralManeuverPlan']:
-      # a lane-change unwind armed before maneuver mode must not resume stale after it
+      # clear the whole assist layer: state armed before maneuver mode (a held floor, a
+      # lane-change arrest in progress) must not resume stale after it
+      turn_assist = getattr(self, 'turn_assist', None)
+      if turn_assist is not None:
+        turn_assist.reset()
       self.lane_change_smoothing.reset()
       return new_desired_curvature
     # the low-speed turn assist shapes the request before the pace clamp, on cars that have it

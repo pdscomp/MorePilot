@@ -257,6 +257,12 @@ class TurnAssistController:
 
     v_ego = CS.vEgo
     blinker_dir = float(CS.rightBlinker) - float(CS.leftBlinker)
+    # A lane change owns this blinker: its plan bend is not a turn (same exclusion the
+    # turn lead already applies). Without it a stop-and-go lane change below the release
+    # speed gets its curvature captured as turn intent and the floor fights the recenter.
+    lane_changing = model_v2.meta.laneChangeState != log.LaneChangeState.off
+    if lane_changing:
+      self.hold = 0.0
     # heading swept in the blinker's direction over the whole blinker cycle (any
     # speed): discriminates a turn not yet made from one being exited
     if blinker_dir == 0.0:
@@ -268,7 +274,7 @@ class TurnAssistController:
       # hold state clears, but the turn lead below still runs: its speed range
       # (3-7 m/s) deliberately straddles the hold's release speed
       self.reset()
-      return self._apply_turn_lead(CS, lat_active, model_v2, new_desired_curvature, current_curvature, blinker_dir)
+      return self._apply_turn_lead(CS, lat_active, model_v2, new_desired_curvature, current_curvature, blinker_dir, lane_changing)
 
     if self.hold == 0.0:
       self.swept = 0.0
@@ -332,7 +338,7 @@ class TurnAssistController:
       # EXIT unwind from re-latching a large hold against the model's recentering.
       self.done = False
 
-    if blinker_dir != 0.0 and not self.done:
+    if blinker_dir != 0.0 and not self.done and not lane_changing:
       # Ratchet up on the raw model command, never on the floored/measured value, so
       # the hold can't feed itself and defeat the decay. Below the release speed the
       # plan's spatial curvature is the second, earlier-seeing source: it shows the
@@ -380,10 +386,10 @@ class TurnAssistController:
       if new_desired_curvature * hold_dir < abs(self.hold):
         new_desired_curvature = self.hold
 
-    return self._apply_turn_lead(CS, lat_active, model_v2, new_desired_curvature, current_curvature, blinker_dir)
+    return self._apply_turn_lead(CS, lat_active, model_v2, new_desired_curvature, current_curvature, blinker_dir, lane_changing)
 
   def _apply_turn_lead(self, CS: structs.CarState, lat_active: bool, model_v2, new_desired_curvature: float,
-                       current_curvature: float, blinker_dir: float) -> float:
+                       current_curvature: float, blinker_dir: float, lane_changing: bool) -> float:
     # Applied AFTER the hold block so the ratchet/handoff only ever see the raw model
     # action; pure max-magnitude, so it can never reduce or oppose the model. Lane
     # changes are excluded: that blinker's plan bend is not a turn. The model-oppose
@@ -392,7 +398,7 @@ class TurnAssistController:
     if not (self.lead_allowed and lat_active and blinker_dir != 0.0 and
             TURN_LEAD_MIN_SPEED <= CS.vEgo < TURN_LEAD_MAX_SPEED and
             new_desired_curvature * blinker_dir > -TURN_LEAD_MODEL_OPPOSE and
-            model_v2.meta.laneChangeState == log.LaneChangeState.off):
+            not lane_changing):
       return new_desired_curvature
     d_near = max(min(TURN_LEAD_T * CS.vEgo, TURN_LEAD_MAX_M), TURN_LEAD_MIN_M)
     stopping_short = CS.aEgo < TURN_LEAD_DECEL_GATE and \
