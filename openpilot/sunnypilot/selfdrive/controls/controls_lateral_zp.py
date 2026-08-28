@@ -33,9 +33,16 @@ TI_TUNE_SEEDS = {
   "LiveTorqueParamsToggle": True,       # "Self-Tune": defaults OFF upstream, we want it learning
   "LaneChangeSmoothing": 2,              # Medium pace; the key is an option index, not a bool
   "LowSpeedTurnAssist": True,           # TI cars steer at standstill, so low-speed assist works
+  # Owner-validated on the CX-8 (tracking RMSE -35%, override share halved vs static).
+  # CX-5 matches its own exact NN model; the CX-8 fuzzy-matches MAZDA_CX5_2022's
+  # (similarity 0.93, field-validated). Gate still requires a model match — cars
+  # without one simply keep the PID path.
+  "NeuralNetworkLateralControl": True,
 }
-# No CX-8 delay override: the owner A/B'd "Live Delay" (the lagd learner) against a fixed
-# 0.05 software delay and reports it performs significantly better — stock LagdToggle=1 wins.
+# No delay seed on either TI platform: the owner has preferred both modes at different
+# times ("Live Delay" in Aug, fixed 0.05 in the current NNLC drives) — there is no proven
+# universal winner, so the stock LagdToggle=1 default governs fresh installs and explicit
+# user picks persist untouched.
 TI_PLATFORMS = ("MAZDA_CX5_2022", "MAZDA_CX8_2022")
 
 

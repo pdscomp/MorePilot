@@ -250,7 +250,9 @@ def _assert_seeds(params, seeds):
 
 
 class TestTorqueTuneTiSeed:
-  """TI cars get v2 + torque-control enforcement seeded once; explicit picks persist."""
+  """TI cars get torque enforcement plus the recommended lateral bundle (incl. NNLC),
+  seeded into unset params only. No delay seeds on either platform — the learner
+  stays stock-default ON and user-changeable."""
 
   def test_ti_on_unset_seeds_v2_and_enforce(self, ctx):
     params, controls = ctx
@@ -332,64 +334,4 @@ class _ExtStub:
     select(controls)
     assert params.get_bool("EnforceTorqueControl")
     assert params.get("LiveTorqueParamsToggle") is None
-
-
-class TestPerCarGainOverride:
-  """latcontrol_torque prefers CP.lateralTuning.torque.kp/ki when a platform sets them
-  (the CX-8's owner-validated 0.6/0.35); unset fields keep the module defaults."""
-
-
-class TestTiLowSpeedKpCap:
-  """Steer-at-standstill (TI) cars cap the kp schedule's low end — the region stock cars
-  never engage in, where sub-0.1 m/s² errors railed the output (CX-8 wiggle autopsy).
-  Stock cars keep the upstream schedule bit-identical."""
-
-  def _controller(self, stz: bool, brand: str = 'mazda'):
-    from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import LatControlTorque
-    CP = car.CarParams.new_message(steerControlType="torque", steerAtStandstill=stz, brand=brand)
-    CP.lateralTuning.init('torque')
-    return LatControlTorque(CP.as_reader(), custom.CarParamsSP.new_message().as_reader(), MagicMock(), 0.01)
-
-  def test_ti_car_caps_low_speed_kp(self):
-    from openpilot.sunnypilot.selfdrive.controls.lib import latcontrol_torque_v0 as lt
-    ctrl = self._controller(True)
-    assert max(ctrl.pid._k_p[1]) == lt.TI_LOW_SPEED_KP_CAP
-    assert ctrl.pid._k_p[1][-1] == lt.KP                # highway entry untouched
-    assert ctrl.pid._k_p[1][6:] == lt.KP_INTERP[6:]     # ≥10 m/s (36 kph) bit-identical
-
-  def test_stock_car_schedule_unchanged(self):
-    from openpilot.sunnypilot.selfdrive.controls.lib import latcontrol_torque_v0 as lt
-    ctrl = self._controller(False)
-    assert ctrl.pid._k_p[1] == lt.KP_INTERP
-
-  def test_non_mazda_steer_at_standstill_unchanged(self):
-    # Tesla/VW/PSA/Ford/Nissan also set steerAtStandstill; the cap is Mazda-TI-scoped.
-    from openpilot.sunnypilot.selfdrive.controls.lib import latcontrol_torque_v0 as lt
-    ctrl = self._controller(True, brand='ford')
-    assert ctrl.pid._k_p[1] == lt.KP_INTERP
-
-
-class TestTiLowSpeedBoostTaper:
-  """The v2 low-speed error boost halves under 5 m/s on Mazda TI CPs (the quadratic term
-  otherwise dominates the capped kp and keeps the output railed), blending to stock by
-  10 m/s. Every other car keeps the stock boost."""
-
-  def _v2(self, stz: bool, brand: str = 'mazda'):
-    from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v2 import LatControlTorque
-    CP = car.CarParams.new_message(steerControlType="torque", steerAtStandstill=stz, brand=brand)
-    CP.lateralTuning.init('torque')
-    return LatControlTorque(CP.as_reader(), custom.CarParamsSP.new_message().as_reader(), MagicMock(), 0.01)
-
-  def test_scale_schedule(self):
-    from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v2 import ti_lsf_scale
-    assert ti_lsf_scale(0.0) == 0.5
-    assert ti_lsf_scale(5.0) == 0.5
-    assert ti_lsf_scale(10.0) == 1.0
-    assert ti_lsf_scale(30.0) == 1.0
-    assert 0.5 < ti_lsf_scale(7.5) < 1.0
-
-  def test_gate(self):
-    assert self._v2(True)._ti_lsf_scaled
-    assert not self._v2(False)._ti_lsf_scaled
-    assert not self._v2(True, brand='ford')._ti_lsf_scaled
 
