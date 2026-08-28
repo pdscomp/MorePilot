@@ -238,6 +238,17 @@ class TestTorqueTuneSelection:
     from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import jerk_aware_has_effect
 
 
+def _with_fingerprint(controls, fingerprint: str):
+  CP = car.CarParams.new_message(steerControlType="torque", carFingerprint=fingerprint)
+  CP.lateralTuning.init('torque')
+  controls.CP = CP.as_reader()
+
+
+def _assert_seeds(params, seeds):
+  for key, value in seeds.items():
+    assert params.get(key) == value, key  # typed params layer: get returns bool/int/float
+
+
 class TestTorqueTuneTiSeed:
   """TI cars get v2 + torque-control enforcement seeded once; explicit picks persist."""
 
@@ -293,6 +304,39 @@ class _ExtStub:
     params.put("TorqueControlTune", small, block=True)
     params.put("TorqueControlTuneBig", big, block=True)
     assert jerk_aware_has_effect(params) is expected
+
+
+  def test_cx8_gets_base_bundle_and_live_delay_left_alone(self, ctx):
+    params, controls = ctx
+    _with_fingerprint(controls, "MAZDA_CX8_2022")
+    params.put_bool("TorqueInterceptorEnabled", True, block=True)
+    select(controls)
+    _assert_seeds(params, controlsd_ext.TI_TUNE_SEEDS)
+    # owner-validated: "Live Delay" (lagd learner) beats a fixed manual delay, so the CX-8
+    # gets NO delay seed — stock LagdToggle=1 default applies and stays user-changeable
+    assert params.get("LagdToggle") is None
+    assert params.get("LagdToggleDelay") is None
+
+  def test_cx5_gets_base_bundle_without_delay_pair(self, ctx):
+    params, controls = ctx
+    _with_fingerprint(controls, "MAZDA_CX5_2022")
+    params.put_bool("TorqueInterceptorEnabled", True, block=True)
+    select(controls)
+    _assert_seeds(params, controlsd_ext.TI_TUNE_SEEDS)
+    assert params.get("LagdToggle") is None
+    assert params.get("LagdToggleDelay") is None
+
+  def test_non_seeded_platform_gets_enforce_but_no_bundle(self, ctx):
+    params, controls = ctx  # fixture fingerprint is a non-seeded platform ("")
+    params.put_bool("TorqueInterceptorEnabled", True, block=True)
+    select(controls)
+    assert params.get_bool("EnforceTorqueControl")
+    assert params.get("LiveTorqueParamsToggle") is None
+
+
+class TestPerCarGainOverride:
+  """latcontrol_torque prefers CP.lateralTuning.torque.kp/ki when a platform sets them
+  (the CX-8's owner-validated 0.6/0.35); unset fields keep the module defaults."""
 
 
 class TestTiLowSpeedKpCap:

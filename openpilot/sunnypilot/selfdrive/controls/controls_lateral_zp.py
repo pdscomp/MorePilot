@@ -25,6 +25,38 @@ from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import resolved_tun
 TUNE_SWAP_INACTIVE_FRAMES = round(0.5 / DT_CTRL)
 
 
+# TI recommended-settings seeds. Unset params only — explicit user picks persist.
+# Only keys that DIFFER from upstream defaults belong here; unset-only seeding a key to
+# its stock default is a dead write. Stock already covers:
+# LagdToggle=1, LateralJerkTorqueController=0, CustomTorqueParams=0, TorqueParamsOverrideEnabled=0.
+TI_TUNE_SEEDS = {
+  "LiveTorqueParamsToggle": True,       # "Self-Tune": defaults OFF upstream, we want it learning
+  "LaneChangeSmoothing": 2,              # Medium pace; the key is an option index, not a bool
+  "LowSpeedTurnAssist": True,           # TI cars steer at standstill, so low-speed assist works
+}
+# No CX-8 delay override: the owner A/B'd "Live Delay" (the lagd learner) against a fixed
+# 0.05 software delay and reports it performs significantly better — stock LagdToggle=1 wins.
+TI_PLATFORMS = ("MAZDA_CX5_2022", "MAZDA_CX8_2022")
+
+
+def seed_ti_defaults(params, CP) -> None:
+  """TI cars get torque enforcement plus our recommended lateral defaults, seeded once.
+  Unset params only — anything the user explicitly picked is left alone."""
+  if not params.get_bool("TorqueInterceptorEnabled"):
+    return
+  if params.get("EnforceTorqueControl") is None:
+    # enforcement off pins v0 via the resolver; the tune resolves to the declared 2.0
+    # default once enforced. block=True: resolved_tune_version reads it right after, same call.
+    params.put_bool("EnforceTorqueControl", True, block=True)
+  if params.get("TorqueControlTune") is None:
+    params.put("TorqueControlTune", 2.0, block=True)
+  if CP.carFingerprint not in TI_PLATFORMS:
+    return
+  for key, value in TI_TUNE_SEEDS.items():
+    if params.get(key) is None:
+      params.put(key, value, block=True)
+
+
 class ControlsLateralZP:
   """zoompilot's lateral additions to ControlsExt: a torque tune per model size, the steer-limit
   classifier, the speed-binned torque dispatch and lane-change smoothing."""
@@ -51,11 +83,7 @@ class ControlsLateralZP:
     # resolution hangs off of (without it every Mazda is pinned to v0 below).
     # Seeds fire only while the param is UNSET - an explicit user pick (including
     # enforce-off, or any tune version) is a set param and always persists.
-    if self.params.get_bool("TorqueInterceptorEnabled"):
-      if self.params.get("EnforceTorqueControl") is None:
-        self.params.put_bool("EnforceTorqueControl", True, block=True)
-      if self.params.get("TorqueControlTune") is None:
-        self.params.put("TorqueControlTune", 2.0, block=True)
+    seed_ti_defaults(self.params, self.CP)
 
     versions = resolved_tune_versions(self.params, self.CP.lateralTuning.which() == 'torque')
 
