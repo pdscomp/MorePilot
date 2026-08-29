@@ -284,3 +284,40 @@ Caveats: the sim has no lead cars and no driver, so it runs hotter everywhere; t
 plant is a crude servo (react 0.3 s, 9 mph/s walk, measured gap map, 1.0 s lag); sccMap and
 SLA overshoot engagement is unit-tested but not replay-tested (11 sccMap frames in the whole
 corpus). On-car validation is pending for everything.
+
+## Route 126 revisions (2026-08-29, first on-car drive)
+
+First winding-road drive (`00000126--5418de7736`, 712 s, 25 apexes): 8/25 over the ceiling
+(vs 54-59% before the rewrite), driver verdict improved — but the ICBM restore path, not the
+solver, produced the complaints. Three servo revisions followed, replay-validated against the
+route:
+
+- **Quiet timer keys on the raw plan target.** The decel-overshoot lever's slow release moved
+  the servo's `v_target` every few frames after a limiter ended, so `restore_quiet_timer`
+  reset continuously and the restore could not start until the decay finished: measured 4.1 s
+  of extra post-curve braking (release at t=455 with dash 24 / setpoint 40; the car fell
+  another 6.6 mph after the road straightened). The timer now watches `LP_SP.vTarget` before
+  the overshoot adjustment; the lever's own motion is not plan motion. The residual also
+  releases at the build rate (10 mph/s) once the source is back on `cruise` — the gentle
+  3 mph/s release only exists to ride out `aTarget` flapping between the ECU's decel stages,
+  which requires a live limiter. Replay over the route's 11 restore episodes: first up-press
+  median 1.94 s -> 1.29 s, worst 4.08 s -> 2.29 s.
+- **Vision lookahead replaces the stillness heuristic** (`vAheadMin`, new wire in
+  `longitudinalPlanSP.smartCruiseControl.vision`): the lowest planned speed on the model
+  horizon, 0 when there is no lookahead (feature off, long disabled, no model — servo falls
+  back to stillness). With it valid the servo restores on the react timer alone when nothing
+  ahead binds below the target, and holds — however quiet the target — while a dip is coming;
+  an in-flight restore aborts when a dip appears. Restoring between bends fed 3 of the
+  route's 8 over-ceiling apexes (t=383/470/488: dash walked up between curves, the ECU
+  accelerated 30->36 mph into the next bend before the commit gate could catch it).
+- **Driver SET+ grace window (3 s).** A genuine wheel press parks synthesized down-moves:
+  at t=341 the driver's +5 (30->35) was walked back to 27 within 1.4 s by the servo's
+  decreaseHold. Accountability mirrors the gas override — the press is the driver's, so
+  there is no urgency carve-out; a SET- press cancels the grace (aligned intent). The
+  overshoot gap does not wind up behind the grace (same rule as the confirm-prompt freeze).
+
+Open items from the drive: delivered decel through approaches measured 0.2-0.56 m/s^2
+against the 0.71 planned (the 0.75 mazda budget may still be optimistic in chained curves);
+the model under-predicts far curvature (the t=452 S-curve refined its target 34.6 -> 23.5 mph
+on approach and needed 1.36 m/s^2 — beyond the stock lever at any commit time); one 2.21
+apex never committed because the predicted allowed speed sat exactly at the setpoint.
