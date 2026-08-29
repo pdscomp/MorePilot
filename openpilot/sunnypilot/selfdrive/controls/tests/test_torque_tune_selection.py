@@ -324,3 +324,28 @@ class TestTiLowSpeedKpCap:
     ctrl = self._controller(True, brand='ford')
     assert ctrl.pid._k_p[1] == lt.KP_INTERP
 
+
+class TestTiLowSpeedBoostTaper:
+  """The v2 low-speed error boost halves under 5 m/s on Mazda TI CPs (the quadratic term
+  otherwise dominates the capped kp and keeps the output railed), blending to stock by
+  10 m/s. Every other car keeps the stock boost."""
+
+  def _v2(self, stz: bool, brand: str = 'mazda'):
+    from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v2 import LatControlTorque
+    CP = car.CarParams.new_message(steerControlType="torque", steerAtStandstill=stz, brand=brand)
+    CP.lateralTuning.init('torque')
+    return LatControlTorque(CP.as_reader(), custom.CarParamsSP.new_message().as_reader(), MagicMock(), 0.01)
+
+  def test_scale_schedule(self):
+    from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v2 import ti_lsf_scale
+    assert ti_lsf_scale(0.0) == 0.5
+    assert ti_lsf_scale(5.0) == 0.5
+    assert ti_lsf_scale(10.0) == 1.0
+    assert ti_lsf_scale(30.0) == 1.0
+    assert 0.5 < ti_lsf_scale(7.5) < 1.0
+
+  def test_gate(self):
+    assert self._v2(True)._ti_lsf_scaled
+    assert not self._v2(False)._ti_lsf_scaled
+    assert not self._v2(True, brand='ford')._ti_lsf_scaled
+
