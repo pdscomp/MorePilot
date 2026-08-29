@@ -79,6 +79,11 @@ same request.
 
 ## Proposal: kinematic curve entry
 
+Superseded by `docs/curve-and-limit-planning.md`, which is the plan of record. The
+sketch below is kept for the reasoning; the plan replaces peak-picking with a backward
+pass over the path and corrects the deceleration budget.
+
+
 The model already carries everything needed; the percentile is what discards it.
 
 1. **Locate the peak, not just its height.** Take the argmax (or a high percentile with its

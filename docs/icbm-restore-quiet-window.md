@@ -68,6 +68,11 @@ restore count, no regret, 40% less lag.
 
 ## Recommendation
 
+Sequencing and the lookahead design now live in
+`docs/curve-and-limit-planning.md` (Phases 0 and 6); this section is the measurement
+that motivates them.
+
+
 1. **Now:** `RESTORE_QUIET_TIME` 3.0 -> 1.0. One line. Keeps the jitter absorption that carries
    the benefit, halves the restore delay. `test_icbm_cruise.py:245` and `:262` compute from the
    constant and should still pass.
