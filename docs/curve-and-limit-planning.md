@@ -316,6 +316,16 @@ route:
   there is no urgency carve-out; a SET- press cancels the grace (aligned intent). The
   overshoot gap does not wind up behind the grace (same rule as the confirm-prompt freeze).
 
+- **Synthesized holds never grid-snap** (follow-up finding, same route): every one of the
+  294 dash steps during servo sends was 1 mph — hold frames 4.1 mph/s, taps 3.8 mph/s,
+  against ~9 mph/s for a physical hold. The wheel's genuine button-up frames keep
+  broadcasting at 10 Hz, so forged hold frames interleave and register as discrete
+  presses; from our bus position an unbroken held signal cannot be forged. The planner's
+  `dash_traversal_time` now uses the measured 4.0 mph/s servo walk rate instead of the
+  native hold grid, which was undersizing the actuation lead ~2x on big drops and
+  committing curves ~2 s late (the t=452 signature). Making the ECU actually snap would
+  take an on-car experiment with denser forged-frame bursts between the wheel's frames.
+
 Open items from the drive: delivered decel through approaches measured 0.2-0.56 m/s^2
 against the 0.71 planned (the 0.75 mazda budget may still be optimistic in chained curves);
 the model under-predicts far curvature (the t=452 S-curve refined its target 34.6 -> 23.5 mph
