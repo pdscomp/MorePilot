@@ -2,7 +2,9 @@
 
 Status: planned 2026-08-29, reviewed against the code the same day (every cited line and
 mechanism verified; the review added the mpc seed consumer, the SLA mirror path, and the jerk
-ramp sizing). Nothing implemented yet. Supersedes the proposal sections of
+ramp sizing). IMPLEMENTED the same day - all phases, see "As built" at the end
+(`12afb6f7f5` `7889c458b2` `20545be0c0` `0c0644281d` `aa686861d7`). Supersedes the proposal
+sections of
 `docs/scc-vision-curve-entry.md` and `docs/icbm-restore-quiet-window.md`; both remain the
 evidence of record for the measurements cited here.
 
@@ -224,11 +226,12 @@ Validation: rerun the `W` sweep with the lookahead gate against the corpus.
 
 ## Open decisions
 
-1. **Lateral acceleration ceiling.** `_A_LAT_REG_MAX` is 2.0; measured apex p50 is 2.01, so at 2.0
-   this intervenes in half of all curves once it works. 2.2 (roughly the measured p75) matches how
-   the car is actually driven. Recommend 2.2, exposed rather than hard-coded.
-2. **Phase 2 rollout.** Default-off behind the existing toggle, or straight replacement given the
-   current behaviour is near-inert.
+Both decided 2026-08-29:
+
+1. **Lateral acceleration ceiling: 2.0** (user decision). The solver plans to 95% of it
+   (`_PLAN_MARGIN`) so actuation lag lands the apex on the ceiling instead of over it.
+2. **Phase 2 rollout: behind the existing `SmartCruiseControlVision` toggle**, default-off,
+   promoted after on-car validation.
 
 ## Caveats
 
@@ -237,3 +240,47 @@ Validation: rerun the `W` sweep with the lookahead gate against the corpus.
   before they harden.
 - The 0.75 stock-ACC figure is the *gap lever's* saturation, not the car's braking capability.
 - Nothing here is on-car validated.
+
+## As built (2026-08-29)
+
+All phases landed the same day. Deltas from the plan above:
+
+- **Phases 2 and 3 landed as one commit** (`20545be0c0`): the solver needs a budget from its
+  first frame, so per-path limits (`limits.py`: 1.2 / 0.75, lead terms, `J_CRUISE` mirror)
+  shipped with it rather than after it.
+- **Phase 6 needed no ICBM change and no new wire.** On stock cars the vision controller
+  publishes `min(profile over the whole horizon)` as `vTarget` (the dash cannot track a
+  continuous profile and has to be pre-positioned anyway), so dips within the model horizon
+  are pre-merged before ICBM ever sees them; the 1.0 s quiet window from Phase 0 remains as
+  the no-preview fallback. The lookahead gate materialized as target shaping.
+- **Two constants the sweep added:** `_PLAN_MARGIN = 0.95` (planning at the raw ceiling left
+  13% of fair apexes above 2.2; 0.95 drops that to 5% for 1.4% of speed given up) and
+  `COMMIT_FRAC = 0.7` (shared by vision, map and the resolver's adapt gate).
+- **Two publication caps the replay surfaced:** near convergence a bumper-distance constraint
+  makes `required_decel` scream through its distance floor, so the published request is capped
+  at the unit-gain pull to the lowest profile speed ahead; and on openpilot long `vTarget`
+  never goes below that lowest profile speed (past it the P candidate is already railed).
+- **Phase 4's pcm-side fix was pre-built**: `acceleration_solutions` existed dead in
+  `speed_limit_assist.py`; the commit wires it, adds the publication ramp, and gives the
+  non-pcm mirror the same physics from `vCap` + the resolver distance.
+
+### Closed-loop replay (the validation of record)
+
+69 curve apexes over the 11-route corpus, sim car driven by the new controller over the
+recorded road geometry with the platform plant; the recorded baseline includes the driver's
+own braking, the sim gets none:
+
+| | recorded p50/p90/p99 | sim p50/p90/p99 | >2.0 rec -> sim |
+|---|---|---|---|
+| openpilot long (51) | 1.61 / 2.45 / 3.17 | 1.92 / 2.18 / 3.67 | 25% -> 16% |
+| stock ACC (18) | 1.54 / 2.14 / 2.87 | 1.82 / 2.20 / 2.31 | 22% -> 28% |
+
+Of 12 sim apexes above 2.2: 4 are floor-limited (allowed speed below `MIN_V`, physically
+excluded), 0 short-warning, 8 marginal misses of 0.2-0.4 (the lag tail the margin shrinks).
+The sim p99 outliers are the floor-limited hairpins. The stock >2.0 bucket is fat but
+shallow: the 0.75 lever saturates, and the recorded 22% had a driver braking for it.
+
+Caveats: the sim has no lead cars and no driver, so it runs hotter everywhere; the stock
+plant is a crude servo (react 0.3 s, 9 mph/s walk, measured gap map, 1.0 s lag); sccMap and
+SLA overshoot engagement is unit-tested but not replay-tested (11 sccMap frames in the whole
+corpus). On-car validation is pending for everything.
