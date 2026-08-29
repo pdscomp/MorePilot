@@ -279,9 +279,10 @@ class TestServo:
       self.run_frames(59, 55, n=100, source='cruise', icbm=icbm)
     assert icbm.state == State.holding
 
-  def test_hold_planned_for_coarse_moves(self):
-    """Mazda profile, imperial: a move spanning >= one snap step starts as a hold, drops
-    to taps for the remainder, and lands exactly."""
+  def test_fast_stream_for_large_moves(self):
+    """A move with real distance runs the stream, drops to taps for the small remainder,
+    and lands exactly. The dash walks in 1 mph presses: that is all the ECU ever does
+    with forged frames."""
     icbm = self.make_icbm(brand="mazda")
     self.run_frames(60, 60, n=60, icbm=icbm)
 
@@ -289,41 +290,43 @@ class TestServo:
     assert icbm.state == State.decreasing
     assert icbm.cruise_button == SendButtonState.decreaseHold
 
-    # ECU snaps 60 -> 55 -> 50; remaining 5 still holds, at 49 the remainder is taps
-    self.run_frames(45, 50, n=5, icbm=icbm)
+    # dash walks down 1 mph at a time; the stream holds until the remainder is small
+    self.run_frames(45, 48, n=5, icbm=icbm)
     assert icbm.cruise_button == SendButtonState.decreaseHold
-    self.run_frames(45, 49, n=5, icbm=icbm)
+    self.run_frames(45, 47, n=5, icbm=icbm)
     assert icbm.cruise_button == SendButtonState.decrease
 
     self.run_frames(45, 45, n=5, icbm=icbm)
     assert icbm.state == State.holding
 
-  def test_hold_falls_back_to_taps_when_dash_frozen(self):
-    """If a synthesized hold never lands a step, long-press is disabled for the drive."""
+  def test_stream_falls_back_to_taps_when_dash_frozen(self):
+    """If the dash never moves under the stream, this ECU is not registering it; taps
+    are the proven fallback for the rest of the drive."""
     icbm = self.make_icbm(brand="mazda")
     self.run_frames(60, 60, n=60, icbm=icbm)
 
     self.run_frames(45, 60, n=60, icbm=icbm)
     assert icbm.cruise_button == SendButtonState.decreaseHold
 
-    # dash frozen past first_step + margin -> fault and tap from here on
-    self.run_frames(45, 60, n=150, icbm=icbm)
-    assert icbm.longpress_faulted
+    # dash frozen past the stall window -> fault and tap from here on
+    self.run_frames(45, 60, n=160, icbm=icbm)
+    assert icbm.fast_faulted
     assert icbm.cruise_button == SendButtonState.decrease
 
-    # a later coarse move stays taps-only
+    # a later large move stays taps-only
     self.run_frames(60, 60, n=200, icbm=icbm)
     self.run_frames(40, 60, n=60, icbm=icbm)
     assert icbm.cruise_button == SendButtonState.decrease
 
-  def test_metric_plans_taps_only(self):
-    """The Mazda long-press grid is only characterized in mph; metric must not hold."""
+  def test_metric_uses_the_stream_too(self):
+    """The stream carries no grid assumption (it is just presses), so metric users get
+    the fast walk as well."""
     icbm = self.make_icbm(brand="mazda")
     self.run_frames(60, 60, n=60, icbm=icbm, is_metric=True)
 
     self.run_frames(45, 60, n=60, icbm=icbm, is_metric=True)
     assert icbm.state == State.decreasing
-    assert icbm.cruise_button == SendButtonState.decrease
+    assert icbm.cruise_button == SendButtonState.decreaseHold
 
 
 class TestDecelOvershoot:

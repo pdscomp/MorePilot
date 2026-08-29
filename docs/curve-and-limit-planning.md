@@ -326,6 +326,14 @@ route:
   committing curves ~2 s late (the t=452 signature). Making the ECU actually snap would
   take an on-car experiment with denser forged-frame bursts between the wheel's frames.
 
+- **The hold machinery reframed as a fast-walk stream** (follow-up to the census): the
+  servo's two send modes are now honest about what they are -- a continuous 10 Hz stream
+  for any move >= 3 display units (the fastest walk the ECU accepts, ~4 mph/s) and paced
+  taps for the small remainder (precision; the stream's in-flight frames overshoot). The
+  grid/metric assumptions, native-hold step timing and its watchdog are gone; a plain
+  1.5 s stall detector falls back to taps for the drive. Metric users get the stream too.
+  Wire behavior is unchanged.
+
 Open items from the drive: delivered decel through approaches measured 0.2-0.56 m/s^2
 against the 0.71 planned (the 0.75 mazda budget may still be optimistic in chained curves);
 the model under-predicts far curvature (the t=452 S-curve refined its target 34.6 -> 23.5 mph
