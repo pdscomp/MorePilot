@@ -241,7 +241,8 @@ class Loop:
         session_msg = custom.CarStateSP.new_message()
         self.helper.cruise_arbiter.fill_msg(session_msg)
         self.events_sp.clear()
-        self.mirror.update(session_msg.cruiseSession, 0., self.events_sp)
+        v_ego_mph = self.v_ego_mph if self.v_ego_mph is not None else self.helper.v_cruise_kph / MPH_KPH
+        self.mirror.update(session_msg.cruiseSession, v_ego_mph * MPH_MS, 0., 0., self.events_sp)
         self.sla_events.extend((self.tick_n, e) for e in self.events_sp.events)
 
       # selfdrived: servo against the real dash; the session state it sees is one
@@ -594,7 +595,7 @@ class TestDriverInteractions:
     assert loop.v_cruise_mph == 49, f"declining press must still increment: {loop.v_cruise_mph}"
 
     dash_at_decline = loop.ecu.dash
-    loop.run(2.4)  # inside the quiet window (3 s)
+    loop.run(0.3)  # still inside the quiet window (1 s, counted from the decline)
     assert loop.ecu.dash <= dash_at_decline + 1, \
       f"restore began inside the quiet window: {loop.ecu.dash} from {dash_at_decline}"
     loop.run(12.0)
