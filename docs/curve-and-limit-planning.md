@@ -1,6 +1,8 @@
 # Curve and limit speed planning: plan of record
 
-Status: planned 2026-08-29, nothing implemented yet. Supersedes the proposal sections of
+Status: planned 2026-08-29, reviewed against the code the same day (every cited line and
+mechanism verified; the review added the mpc seed consumer, the SLA mirror path, and the jerk
+ramp sizing). Nothing implemented yet. Supersedes the proposal sections of
 `docs/scc-vision-curve-entry.md` and `docs/icbm-restore-quiet-window.md`; both remain the
 evidence of record for the measurements cited here.
 
@@ -65,15 +67,33 @@ consumers already read them:
   controller with gain 1 s^-1 and a hard -1.2 m/s2 clip. Two consequences: the openpilot-long
   budget is **1.2, not the -1.45 p95 measured** (that came from the MPC's lead candidate, not from
   a speed target), and to command decel `a` the published target must sit `a` m/s **below**
-  `v_ego`. So the output is `min(v_profile, v_ego - a_required)`.
+  `v_ego`. So the output is `min(v_profile, v_ego - a_required)`. Against a *fixed* target a
+  P controller fades exponentially and never quite arrives; the re-solve each frame keeps the
+  target tracking `v_ego` down, holding the gap - and the commanded decel - until the profile is
+  met. The moving target is the mechanism, not a side effect.
+- **openpilot longitudinal also consumes `aTarget`** (found in review): the winning source's
+  `aTarget` is fed to `mpc.set_cur_state` as the MPC's initial acceleration and into the
+  `v_desired_filter` integration (`longitudinal_planner.py:116-119,157`). The MPC candidate built
+  from that seed is **not** jerk-limited the way the cruise candidate is, so publishing a step
+  from ~0 to -1.2 in one frame reaches the actuators as a snap for the first few frames. The
+  published `aTarget` must therefore carry the profile's own jerk-in ramp
+  (`max(a_required, a_prev - j*dt)`), not the raw budget.
 - **stock ACC** goes through ICBM, whose decel-overshoot converts a requested decel into a dash
   gap when `LP_SP.aTarget < -min_decel and CS.vEgo > LP_SP.vTarget`
   (`intelligent_cruise_button_management/controller.py:133`). `DECEL_OVERSHOOT_SOURCES` already
   lists all three limiter sources.
 
+The wire is single-valued but the budget is per-car, not per-consumer: a car is either
+openpilot-long or stock ACC for the whole drive, so the planner picks the budget from
+`CP.openpilotLongitudinalControl` at init.
+
 Note the `+ a_target * _NO_OVERSHOOT_TIME_HORIZON` term in SCC-V is not conceptually wrong: the
 target does have to lead `v_ego` to do anything. It is mis-sized - 4 s of an unrelated comfort
 ramp instead of the decel actually required.
+
+`MIN_V` (20 km/h) floors every limiter target, so the profile cannot command below ~5.6 m/s.
+At a 2.2 budget that only binds for curvature above ~0.07 1/m (a parking-lot hairpin); keep the
+floor.
 
 ### Per-path deceleration budget
 
@@ -103,7 +123,7 @@ corpus).
 ```
 d_needed = (v_ego**2 - v_target**2) / (2 * a_budget)   # physics
          + v_ego * t_lead                              # actuation lead, see below
-         + jerk ramp distance                          # ~0.5-1 s easing into a_budget
+         + jerk ramp distance                          # from J_CRUISE_VALS, see below
 trigger when d_remaining <= d_needed / commit_fraction  # commit_fraction ~0.8
 ```
 
@@ -111,6 +131,10 @@ trigger when d_remaining <= d_needed / commit_fraction  # commit_fraction ~0.8
   **dash traversal + MRCC response**, i.e. seconds: moving the dash 20 mph is ~2.3 s of 5 mph
   holds per `ICBMActuationProfile`. A deadline computed without this is systematically late on the
   stock path.
+- The jerk ramp is not free to size: on openpilot long the cruise candidate is clipped to
+  `J_CRUISE_VALS` (0.8 at 25 m/s, 0.6 at 40), so reaching -1.2 from 0 takes 1.5-2 s at highway
+  speed. Compute the ramp distance from `J_CRUISE_VALS`, roughly `v_ego * a_budget / (2 * j)`
+  (~13 m at 20 m/s), rather than assuming 0.5-1 s.
 - `commit_fraction` at 0.8 leaves headroom. Triggering at exactly the budget means any error -
   a slope, a bad curvature sample, a slow actuator - has nowhere to go.
 - Re-solve every frame so the profile releases the moment the constraint relaxes. This is also the
@@ -149,8 +173,9 @@ degenerate `ds`.
 Risk: none, nothing consumes it yet.
 
 **Phase 2 - SCC-V adopts the solver.** Geometry curvature, backward pass, publish
-`min(v_profile, v_ego - a_required)` and a real `a_target`. Keep the state machine for UI and
-alerts; it stops being load-bearing.
+`min(v_profile, v_ego - a_required)` and a real `a_target` - jerk-ramped, never a one-frame step
+(it seeds `mpc.set_cur_state`, see the output-channels section). Keep the state machine for UI
+and alerts; it stops being load-bearing.
 Validation: replay the 49 limiter segments and compare the apex lateral-acceleration
 distribution; the 54-59% overshoot rate should collapse. Existing `test_vision_controller.py`
 asserts the current formula and will need rewriting with it.
@@ -158,16 +183,30 @@ Risk: **this is the behavioural cliff.** The feature is near-inert today; once i
 roughly half of all curves. Ship behind the existing `SmartCruiseControlVision` toggle and
 validate on car before it becomes default.
 
-**Phase 3 - per-path budget and lead time.** Budget from a per-car profile (1.2 / 0.75), stock-ACC
-lead term from `ICBMActuationProfile`.
+**Phase 3 - per-path budget and lead time.** Budget from a per-car profile (1.2 / 0.75), selected
+once at planner init from `CP.openpilotLongitudinalControl`; stock-ACC lead term from
+`ICBMActuationProfile`.
 Validation: replay both route groups separately; achieved/commanded should approach 1.0.
 Risk: low, but the stock-path lead term is the easiest thing to get wrong.
 
 **Phase 4 - map and SLA publish a real `a_target`.** Both currently
-`return self.a_ego` (`map_controller.py:97`, `speed_limit_assist.py:129`, the latter under a
+`return self.a_ego` (`map_controller.py:97`, `speed_limit_assist.py:128`, the latter under a
 `# TODO-SP` acknowledging it). Because ICBM keys the dash-gap on `aTarget`, **map curves and
 speed limits never get the overshoot treatment on stock ACC** except by coincidence when `a_ego`
-happens to be negative enough. Feed them the solver's required decel instead.
+happens to be negative enough. Three code sites, found in review:
+
+- `speed_limit_assist.py` already *contains* the physics, dead: `acceleration_solutions`
+  (built at `:89`, keyed by state - adapting gets `(limit^2 - v_ego^2) / (2d)`, active gets
+  `v_offset / T_IDXS[CONTROL_N]`) is never called; `get_a_target_from_control` ignores it and
+  returns `a_ego`. On the **pcm-op-long path** the fix is wiring the existing table in.
+- On the **non-pcm path - every stock-ACC car including the CX-5 - the SLA machine runs in card
+  and plannerd's SLA is `assist_mirror.py`, which hard-codes `output_a_target = a_ego`.** Fixing
+  `speed_limit_assist.py` alone changes nothing on the car this project targets. The mirror
+  should compute the decel locally from `vCap` and the resolver's distance (the resolver runs in
+  plannerd on both paths), keeping the card wire unchanged.
+- `map_controller.py` gets the solver's required decel (or, pre-Phase-1, the same
+  `(v_target^2 - v_ego^2) / (2d)` form).
+
 Validation: replay stock-ACC routes, confirm the overshoot gap engages on `sccMap` and
 `speedLimitAssist` sources.
 Risk: low. Bug fix, not redesign. Independent of Phases 1-3.
