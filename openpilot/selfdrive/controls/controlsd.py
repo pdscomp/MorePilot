@@ -92,6 +92,8 @@ class Controls(ControlsExt):
 
     # Update Torque Params
     if self.CP.lateralTuning.which() == 'torque':
+      if self.lagd_toggle:
+        self.lat_delay = self.sm["lateralDelay"].lateralDelay
       torque_params = self.sm['lateralTorqueParameters']
       if self.sm.all_checks(['lateralTorqueParameters']) and torque_params.useParams:
         self.LaC.update_torque_parameters(torque_params.latAccelFactorFiltered, torque_params.latAccelOffsetFiltered,
@@ -102,6 +104,8 @@ class Controls(ControlsExt):
       self.LaC.extension.update_model_v2(self.sm['modelV2'])
 
       self.LaC.extension.update_lateral_lag(self.lat_delay)
+    else:
+      self.lat_delay = self.sm["lateralDelay"].lateralDelay
 
     long_plan = self.sm['longitudinalPlan']
     model_v2 = self.sm['modelV2']
@@ -145,7 +149,8 @@ class Controls(ControlsExt):
       new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
     new_desired_curvature = self.lane_change_curvature(self.sm, CC.latActive, CS.vEgo, new_desired_curvature, self.desired_curvature)
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
-    lat_delay = self.sm["lateralDelay"].lateralDelay + LAT_SMOOTH_SECONDS
+    # self.lat_delay honors LagdToggle: live lagd estimate when on, the fixed CP-derived total when off
+    lat_delay = self.lat_delay + LAT_SMOOTH_SECONDS
 
     actuators.curvature = self.desired_curvature
     steer, lateral_output, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
