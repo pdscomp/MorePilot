@@ -128,6 +128,14 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.NO_ENTRY: NoEntryAlert("Brake Hold Active"),
   },
 
+  EventNameSP.alphaLongTakeoverPending: {
+    ET.PERMANENT: Alert(
+      "Alpha Long Waiting",
+      "Stop With Cruise Off to Enable",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, 5.),
+  },
+
   EventNameSP.silentWrongGear: {
     ET.WARNING: Alert(
       "",
