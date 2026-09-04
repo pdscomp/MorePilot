@@ -24,6 +24,8 @@ class CarSpecificEventsSP:
     self.CP_SP = CP_SP
 
     self.low_speed_alert = False
+    self.alpha_long_initializing_frames = 0
+    self.alpha_long_initializing_toast_shown = False
     self.alpha_long_pending_frames = 0
     self.alpha_long_toast_shown = False
 
@@ -59,6 +61,14 @@ class CarSpecificEventsSP:
         # shouts at the driver. Keep the banner, drop the escalation.
         events.remove(EventName.steerTempUnavailable)
         events.add(EventName.steerTempUnavailableSilent)
+
+      if CS_SP.alphaLongTakeoverInitializing and not self.alpha_long_initializing_toast_shown:
+        self.alpha_long_initializing_frames += 1
+      else:
+        self.alpha_long_initializing_frames = 0
+      if self.alpha_long_initializing_frames > 20:  # ~200 ms
+        self.alpha_long_initializing_toast_shown = True
+        events_sp.add(EventNameSP.alphaLongTakeoverInitializing)
 
       # The alpha-long radar teardown needs a stop with stock cruise off. While it is
       # still pending the car drives with cruise/lateral locked out and no hint why;

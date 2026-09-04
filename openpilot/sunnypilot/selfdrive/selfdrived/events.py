@@ -136,6 +136,14 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOW, VisualAlert.none, AudibleAlert.none, 5.),
   },
 
+  EventNameSP.alphaLongTakeoverInitializing: {
+    ET.PERMANENT: Alert(
+      "Alpha Long Initializing",
+      "Keep Stopped With Cruise Off",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, 5.),
+  },
+
   EventNameSP.silentWrongGear: {
     ET.WARNING: Alert(
       "",

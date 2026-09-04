@@ -365,6 +365,7 @@ struct OnroadEventSP @0xda96579883444c35 {
     controlsMismatchLateralWarning @26;
     silentPedalPressed @27;
     alphaLongTakeoverPending @28;
+    alphaLongTakeoverInitializing @29;
   }
 }
 
@@ -467,6 +468,7 @@ struct CarStateSP @0xb86e6369214c01c8 {
   speedLimit @0 :Float32;
   zoompilot @1 :CarStateZP;
   alphaLongTakeoverPending @2 :Bool;
+  alphaLongTakeoverInitializing @3 :Bool;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {
