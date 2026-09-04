@@ -650,7 +650,8 @@ struct CarStateZP @0xc879af11c43cb400 {
 
 struct CarControlZP @0xaadf9bc39b7bd41e {
   laneChangeSmoothing @0 :LaneChangeSmoothing;
-  icbmHold @1 :Bool;  # SelfdriveStateZP.icbmHold, for the car's button sender
+  lateralExtension @1 :LateralExtension;
+  icbmHold @2 :Bool;  # SelfdriveStateZP.icbmHold, for the car's button sender
 
   struct LaneChangeSmoothing {
     jerkFactor @0 :Float32;
@@ -756,4 +757,10 @@ struct LongitudinalPlanZP @0xc3b0556e1118c2db {
       lowSpeed @17;     # retired 2026-10, older logs only
     }
   }
+}
+
+enum LateralExtension {
+  none @0;
+  jerkAware @1;
+  neuralNetwork @2;
 }
