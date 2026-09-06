@@ -9,11 +9,12 @@ import pyray as rl
 
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import (TUNE_PARAM_BY_SIZE, jerk_aware_has_effect, label_for,
-                                                                      resolved_tune_versions, stored_tune_versions, versions_by_label)
+                                                                      mazda_v2_ab_available, resolved_tune_versions, stored_tune_versions,
+                                                                      versions_by_label)
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.lib.utils import NoElideButtonAction
-from openpilot.system.ui.sunnypilot.widgets.list_view import ListItemSP, toggle_item_sp, option_item_sp
+from openpilot.system.ui.sunnypilot.widgets.list_view import ListItemSP, multiple_button_item_sp, toggle_item_sp, option_item_sp
 from openpilot.system.ui.sunnypilot.widgets.tree_dialog import TreeOptionDialog, TreeFolder, TreeNode
 from openpilot.system.ui.widgets import Widget, DialogResult
 from openpilot.system.ui.widgets.network import NavButton
@@ -104,10 +105,22 @@ class TorqueSettingsLayout(Widget):
       use_float_scaling=True
     )
 
+    self._mazda_v2_mode = multiple_button_item_sp(
+      title=lambda: tr("CX-5 Torque v2 A/B"),
+      description=lambda: tr(
+        "A keeps the current Torque v2 behavior. B uses the experimental 5–10 m/s " +
+        "low-speed retaper. Maximum steering authority is unchanged. Change while offroad, then reboot."
+      ),
+      buttons=[lambda: tr("A"), lambda: tr("B")],
+      param="MazdaTorqueV2Mode",
+      inline=True,
+    )
+
     items = [
       self._jerk_aware_toggle,
       *self._tune_rows.values(),
       self._predictive_toggle,
+      self._mazda_v2_mode,
       self._self_tune_toggle,
       self._relaxed_tune_toggle,
       self._custom_tune_toggle,
@@ -126,6 +139,9 @@ class TorqueSettingsLayout(Widget):
     # predictive turn-in is a v2-only mechanism: hidden unless some model size will actually run v2
     v2_runs = any(v == 2.0 for v in resolved_tune_versions(ui_state.params).values())
     self._predictive_toggle.set_visible(v2_runs)
+    ab_available = mazda_v2_ab_available(ui_state.params, ui_state.CP)
+    self._mazda_v2_mode.set_visible(ab_available)
+    self._mazda_v2_mode.action_item.set_enabled(ab_available and ui_state.is_offroad())
     self._predictive_toggle.action_item.set_enabled(ui_state.is_offroad())
     if not ui_state.params.get_bool("LiveTorqueParamsToggle"):
       ui_state.params.remove("LiveTorqueParamsRelaxedToggle")

@@ -166,6 +166,39 @@ class TestMultiParamValueMapping:
       w.refresh()
       assert w.value == label
 
+  def test_cx5_v2_ab_maps_labels_to_param_values(self, params):
+    from openpilot.selfdrive.ui.sunnypilot.mici.layouts.steering import SteeringLayoutMici
+
+    selector = SteeringLayoutMici()._tq_mazda_v2_mode
+    assert selector._param == "MazdaTorqueV2Mode"
+    assert selector._options == ["A", "B"]
+    assert selector._values == [0, 1]
+
+    for stored, label in ((0, "A"), (1, "B")):
+      params.put("MazdaTorqueV2Mode", stored, block=True)
+      selector.refresh()
+      assert selector.value == label
+
+  def test_cx5_v2_ab_warning_fits_title(self, params):
+    from openpilot.selfdrive.ui.sunnypilot.mici.layouts.steering import SteeringLayoutMici
+    from openpilot.system.ui.lib.text_measure import measure_text_cached
+
+    import pyray as rl
+
+    selector = SteeringLayoutMici()._tq_mazda_v2_mode
+    selector.render(rl.Rectangle(0, 0, 402, 180))
+    label = selector._label
+    lines = label._cached_wrapped_lines
+    text = " ".join(lines).lower()
+
+    assert len(lines) == 3
+    assert label._cached_total_height <= label._rect.height
+    assert all(measure_text_cached(label._font, line, label.font_size).x <= label._rect.width for line in lines)
+    assert "..." not in text
+    assert "b" in text and "5–10 m/s" in text and "test" in text
+    assert "max" in text and "unchanged" in text
+    assert "reboot" in text
+
 
 class TestDependentSettings:
   """A setting whose parent makes it inert locks, still showing the user's value on a grey pill."""
@@ -359,6 +392,7 @@ class TestJerkAwareToggle:
     from openpilot.selfdrive.ui.ui_state import ui_state
 
     class _CP:
+      carFingerprint = ""
       steerControlType = car.CarParams.SteerControlType.torque
       enableBsm = False
 
@@ -405,6 +439,7 @@ class TestMadsLimitedCallSignature:
 
     class _CP:
       brand = "mazda"
+      carFingerprint = ""
       steerControlType = car.CarParams.SteerControlType.torque
       enableBsm = True
 

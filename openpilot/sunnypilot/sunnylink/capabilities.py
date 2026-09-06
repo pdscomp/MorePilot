@@ -14,6 +14,7 @@ from opendbc.sunnypilot.car.tesla.values import TeslaFlagsSP
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.hardware import HARDWARE
+from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import mazda_v2_ab_available
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import icbm_applicable
 
 
@@ -30,6 +31,8 @@ CAPABILITY_FIELDS = (
   "icbm_available",
   "torque_allowed",
   "brand",
+  "platform",
+  "mazda_torque_v2_ab_available",
   "pcm_cruise",
   "alpha_long_available",
   "steer_control_type",
@@ -52,6 +55,8 @@ CAPABILITY_LABELS: dict[str, str] = {
   "icbm_available": "ICBM available",
   "torque_allowed": "torque steering (not available for angle steering vehicles)",
   "brand": "Vehicle brand",
+  "platform": "Vehicle platform",
+  "mazda_torque_v2_ab_available": "Mazda Torque v2 A/B available",
   "pcm_cruise": "PCM cruise",
   "alpha_long_available": "Alpha Longitudinal available",
   "steer_control_type": "Steer control type",
@@ -70,6 +75,7 @@ CAPABILITY_LABELS: dict[str, str] = {
 # Explicit defaults for non-boolean capability fields
 CAPABILITY_DEFAULTS: dict[str, bool | str | int] = {
   "brand": "",
+  "platform": "",
   "steer_control_type": "",
   "device_type": "",
   "protocol_version": PROTOCOL_VERSION,
@@ -140,6 +146,7 @@ def generate_capabilities(params: Params | None = None) -> dict:
   # Bundle-first brand resolution; CP is fallback only.
   if bundle_brand:
     caps["brand"] = bundle_brand
+  caps["platform"] = bundle_platform
 
   # CarParams-derived capabilities
   CP = None
@@ -159,6 +166,8 @@ def generate_capabilities(params: Params | None = None) -> dict:
       caps["torque_allowed"] = CP.steerControlType != car.CarParams.SteerControlType.angle
       if not caps["brand"] and CP.brand:
         caps["brand"] = str(CP.brand)
+      if not caps["platform"]:
+        caps["platform"] = str(CP.carFingerprint)
       caps["pcm_cruise"] = bool(CP.pcmCruise)
       caps["enable_bsm"] = bool(CP.enableBsm)
       # Generic SnG fallback. Brand-specific opaque flags below override.
@@ -166,6 +175,8 @@ def generate_capabilities(params: Params | None = None) -> dict:
     except Exception:
       CP = None
       cloudlog.exception("capabilities: failed to deserialize CarParamsPersistent")
+
+  caps["mazda_torque_v2_ab_available"] = mazda_v2_ab_available(params, CP)
 
   # CarParamsSP-derived capabilities
   CP_SP_bytes = params.get("CarParamsSPPersistent")

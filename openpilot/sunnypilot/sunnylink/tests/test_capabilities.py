@@ -21,6 +21,8 @@ from openpilot.sunnypilot.sunnylink.capabilities import (
   generate_capabilities,
 )
 from openpilot.common.test import OpenpilotTestCase
+from opendbc.car.structs import car
+from openpilot.common.params import Params
 
 
 KNOWN_PROTOCOL_VERSIONS = (1,)
@@ -89,3 +91,72 @@ class TestCapabilitiesShape(OpenpilotTestCase):
     assert isinstance(caps["brand"], str)
     assert isinstance(caps["steer_control_type"], str)
     assert isinstance(caps["device_type"], str)
+
+
+class TestIcbmApplicable(OpenpilotTestCase):
+  """sunnylink's ICBM enablement reads this field, so it must be the device's own icbm_applicable."""
+
+  def _caps(self, op_long: bool, pcm_cruise: bool):
+    from opendbc.car.structs import car
+    from openpilot.cereal import custom
+    from openpilot.common.params import Params
+    params = Params()
+    params.put("CarParamsPersistent", car.CarParams.new_message(
+      openpilotLongitudinalControl=op_long, pcmCruise=pcm_cruise).to_bytes(), block=True)
+    params.put("CarParamsSPPersistent", custom.CarParamsSP.new_message(
+      intelligentCruiseButtonManagementAvailable=True).to_bytes(), block=True)
+    return generate_capabilities(params)
+
+  def test_alpha_long_on_a_pcm_cruise_car(self):
+    # Mazda alpha long: the body still keeps the set speed, so the buttons have something to move
+    assert self._caps(op_long=True, pcm_cruise=True)["icbm_applicable"]
+
+  def test_openpilot_owns_the_set_speed(self):
+    assert not self._caps(op_long=True, pcm_cruise=False)["icbm_applicable"]
+
+  def test_stock_cruise(self):
+    assert self._caps(op_long=False, pcm_cruise=True)["icbm_applicable"]
+
+
+class TestPlatformCapability(OpenpilotTestCase):
+  @staticmethod
+  def _params_with_cp(platform: str, *, steer_at_standstill: bool = True, torque_tuning: bool = True) -> Params:
+    params = Params()
+    CP = car.CarParams.new_message(carFingerprint=platform, brand="mazda", steerAtStandstill=steer_at_standstill)
+    CP.lateralTuning.init("torque" if torque_tuning else "pid")
+    params.put("CarParamsPersistent", CP.to_bytes(), block=True)
+    return params
+
+  def _ab_available(self, platform: str = "MAZDA_CX5", *, ti: bool = True, steer_at_standstill: bool = True,
+                    torque_tuning: bool = True, tune_version: float = 2.0, bundle_platform: str | None = None) -> bool:
+    params = self._params_with_cp(platform, steer_at_standstill=steer_at_standstill, torque_tuning=torque_tuning)
+    params.put_bool("TorqueInterceptorEnabled", ti, block=True)
+    params.put_bool("EnforceTorqueControl", True, block=True)
+    params.put("TorqueControlTune", tune_version, block=True)
+    if bundle_platform:
+      params.put("CarPlatformBundle", {"brand": "mazda", "platform": bundle_platform}, block=True)
+    return generate_capabilities(params)["mazda_torque_v2_ab_available"]
+
+  def test_bundle_platform_wins(self):
+    params = self._params_with_cp("MAZDA_CX5_2022")
+    params.put("CarPlatformBundle", {"brand": "mazda", "platform": "MAZDA_CX5"}, block=True)
+    assert generate_capabilities(params)["platform"] == "MAZDA_CX5"
+
+  def test_car_params_platform_is_fallback(self):
+    params = self._params_with_cp("MAZDA_CX5")
+    assert generate_capabilities(params)["platform"] == "MAZDA_CX5"
+
+  def test_mazda_torque_v2_ab_availability_truth_table(self):
+    cases = [
+      ("eligible", {}, True),
+      ("native_cx5_2022", {"platform": "MAZDA_CX5_2022"}, False),
+      ("cx8", {"platform": "MAZDA_CX8_2022"}, False),
+      ("ti_off", {"ti": False}, False),
+      ("non_stz", {"steer_at_standstill": False}, False),
+      ("non_torque", {"torque_tuning": False}, False),
+      ("non_v2", {"tune_version": 1.0}, False),
+      ("bundle_cx5_native_2022", {"platform": "MAZDA_CX5_2022", "bundle_platform": "MAZDA_CX5"}, False),
+    ]
+    for name, kwargs, expected in cases:
+      with self.subTest(name=name):
+        assert self._ab_available(**kwargs) is expected

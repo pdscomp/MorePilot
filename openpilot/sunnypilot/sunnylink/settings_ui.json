@@ -513,6 +513,62 @@
                       "type": "offroad_only"
                     }
                   ]
+                },
+                {
+                  "key": "MazdaTorqueV2Mode",
+                  "widget": "multiple_button",
+                  "title": "CX-5 Torque v2 A/B",
+                  "description": "A keeps the current controller. B uses the experimental 5\u201310 m/s low-speed retaper. Maximum steering authority is unchanged. Reboot after changing.",
+                  "options": [
+                    {
+                      "value": 0,
+                      "label": "A (Current)"
+                    },
+                    {
+                      "value": 1,
+                      "label": "B (Low-speed retaper)"
+                    }
+                  ],
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "mazda_torque_v2_ab_available",
+                      "equals": true
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    }
+                  ]
+                },
+                {
+                  "key": "MazdaTorqueV2Mode",
+                  "widget": "multiple_button",
+                  "title": "CX-5 Torque v2 A/B",
+                  "description": "A keeps the current controller. B uses the experimental 5\u201310 m/s low-speed retaper. Maximum steering authority is unchanged. Reboot after changing.",
+                  "options": [
+                    {
+                      "value": 0,
+                      "label": "A (Current)"
+                    },
+                    {
+                      "value": 1,
+                      "label": "B (Low-speed retaper)"
+                    }
+                  ],
+                  "visibility": [
+                    {
+                      "type": "capability",
+                      "field": "mazda_torque_v2_ab_available",
+                      "equals": true
+                    }
+                  ],
+                  "enablement": [
+                    {
+                      "type": "offroad_only"
+                    }
+                  ]
                 }
               ]
             }
