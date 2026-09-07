@@ -21,17 +21,22 @@ class CruiseHelper:
     self.CP = CP
     self.params = Params()
 
-    self.button_frame_counts = {ButtonType.gapAdjustCruise: 0}
+    self.button_frame_counts = {ButtonType.gapAdjustCruise: 0, ButtonType.altButton2: 0}
     self._experimental_mode = False
     self.experimental_mode_switched = False
+    self.alpha_long_switched = False
+    self.alpha_long_blocked = False
 
-  def update(self, CS, events, experimental_mode) -> None:
-    if self.CP.openpilotLongitudinalControl:
-      if CS.cruiseState.available:
-        self.update_button_frame_counts(CS)
-
-        # toggle experimental mode once on distance button hold
+  def update(self, CS, events, experimental_mode, enabled=False) -> None:
+    if any(button.type.raw == ButtonType.altButton2 and not button.pressed for button in CS.buttonEvents):
+      self.alpha_long_switched = False
+      self.alpha_long_blocked = False
+    if CS.cruiseState.available:
+      self.update_button_frame_counts(CS)
+      if self.CP.openpilotLongitudinalControl:
+        # toggle experimental mode once on distance-down hold
         self.update_experimental_mode(events, experimental_mode)
+      self.update_alpha_long(enabled)
 
   def update_button_frame_counts(self, CS) -> None:
     for button in self.button_frame_counts:
@@ -49,3 +54,18 @@ class CruiseHelper:
       self.params.put_bool("ExperimentalMode", self._experimental_mode)
       events.add(EventNameSP.experimentalModeSwitched)
       self.experimental_mode_switched = True
+
+  def update_alpha_long(self, enabled: bool) -> None:
+    # Follow-distance-up is Mazda-specific; the existing toggle monitor owns the safe restart/hand-back.
+    if self.CP.brand != "mazda" or not self.CP.alphaLongitudinalAvailable:
+      return
+    if enabled:
+      self.alpha_long_blocked |= self.button_frame_counts[ButtonType.altButton2] > 0
+      return
+    if self.alpha_long_blocked:
+      return
+    if self.button_frame_counts[ButtonType.altButton2] == 0:
+      self.alpha_long_switched = False
+    elif self.button_frame_counts[ButtonType.altButton2] >= DISTANCE_LONG_PRESS and not self.alpha_long_switched:
+      self.params.put_bool("AlphaLongitudinalEnabled", not self.params.get_bool("AlphaLongitudinalEnabled"))
+      self.alpha_long_switched = True
