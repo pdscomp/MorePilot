@@ -320,6 +320,10 @@ sections:
       label: 2 seconds
     - value: 5
       label: 3 seconds
+  - key: OneLaneChange
+    widget: toggle
+    title: One Lane Change Per Signal
+    description: Allow at most one lane change until the turn signal is released.
   - key: RoadEdgeLaneChangeEnabled
     widget: toggle
     title: 'Block Lane Change: Road Edge Detection'

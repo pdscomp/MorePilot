@@ -166,6 +166,30 @@ class TestMultiParamValueMapping:
       w.refresh()
       assert w.value == label
 
+  def test_one_lane_change_control_is_wired_visible_and_summarized(self, params):
+    import pyray as rl
+
+    from openpilot.selfdrive.ui.sunnypilot.mici.layouts.steering import SteeringLayoutMici
+    from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeMode
+    from openpilot.system.ui.lib.multilang import tr
+    from openpilot.system.ui.lib.text_measure import measure_text_cached
+
+    params.put_bool("OneLaneChange", True, block=True)
+    params.put("AutoLaneChangeTimer", AutoLaneChangeMode.NUDGE, block=True)
+    layout = SteeringLayoutMici()
+    control = layout._lc_one_per_signal
+    assert control.param == "OneLaneChange"
+
+    control.render(rl.Rectangle(0, 0, 402, 180))
+    lines = control._label._cached_wrapped_lines
+    assert " ".join(lines).lower() == "one per signal"
+    assert control._label._cached_total_height <= control._label._rect.height
+    assert all(measure_text_cached(control._label._font, line, control._label.font_size).x <= control._label._rect.width
+               for line in lines)
+
+    layout._update_state()
+    assert tr("one-per-signal") in layout._lane_change_btn._badge_labels
+
   def test_cx5_v2_ab_maps_labels_to_param_values(self, params):
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts.steering import SteeringLayoutMici
 

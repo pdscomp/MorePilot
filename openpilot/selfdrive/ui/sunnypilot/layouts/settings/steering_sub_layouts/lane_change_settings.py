@@ -45,6 +45,11 @@ class LaneChangeSettingsLayout(Widget):
                       f"2 {tr('s')}" if x == 4 else
                       f"3 {tr('s')}")
     )
+    self._one_lane_change = toggle_item_sp(
+      param="OneLaneChange",
+      title=lambda: tr("One Lane Change Per Signal"),
+      description=lambda: tr("Allow at most one lane change until the turn signal is released."),
+    )
     self._bsm_delay = toggle_item_sp(
       param="AutoLaneChangeBsmDelay",
       title=lambda: tr("Auto Lane Change: Delay with Blind Spot"),
@@ -70,6 +75,8 @@ class LaneChangeSettingsLayout(Widget):
 
     items = [
       self._lane_change_timer,
+      LineSeparatorSP(40),
+      self._one_lane_change,
       LineSeparatorSP(40),
       self._bsm_delay,
       LineSeparatorSP(40),

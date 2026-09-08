@@ -114,6 +114,7 @@ class SteeringLayoutMici(NavScroller):
                                            description=tr("Nudge: signal, then nudge the wheel to change lanes.\n" +
                                                           "Nudgeless changes lanes as soon as you signal. A time waits that long first.\n" +
                                                           "Off: zoompilot never changes lanes."))
+    self._lc_one_per_signal = BigParamControl(tr("one per signal"), "OneLaneChange")
     self._lc_bsm = BigParamControlSP(tr("bsm delay"), "AutoLaneChangeBsmDelay",
                                      depends_on=lambda: self._bsm_applies(self._alc_val) and self._car_has_bsm(),
                                      description=tr("Waits an extra second after the blind spot clears."))
@@ -123,7 +124,7 @@ class SteeringLayoutMici(NavScroller):
     self._lc_level = BigMultiParamToggleSP(tr("lane change") + "\n" + tr("smoothing"), "LaneChangeSmoothing", LC_LEVEL_LABELS,
                                            description=tr("Makes lane changes slower and smoother.\n" +
                                                           "Off is stock. Every other pace is slower."))
-    self._lc_view = self._lane_change_btn.link_sub_panel([self._lc_timer, self._lc_bsm, self._lc_road_edge,
+    self._lc_view = self._lane_change_btn.link_sub_panel([self._lc_timer, self._lc_one_per_signal, self._lc_bsm, self._lc_road_edge,
                                                           self._lc_level])
 
     self._blinker_toggle = BigParamControlSP(tr("enable blinker pause"), "BlinkerPauseLateralControl",

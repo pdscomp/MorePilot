@@ -45,6 +45,7 @@ class AutoLaneChangeController:
 
     self.lane_change_set_timer = self.params.get("AutoLaneChangeTimer", return_default=True)
     self.lane_change_bsm_delay = False
+    self.one_lane_change = False
     self.lane_change_time_extra = 0.0
 
     self.prev_brake_pressed = False
@@ -64,6 +65,7 @@ class AutoLaneChangeController:
   def read_params(self) -> None:
     self.lane_change_bsm_delay = self.params.get_bool("AutoLaneChangeBsmDelay")
     self.lane_change_set_timer = self.params.get("AutoLaneChangeTimer", return_default=True)
+    self.one_lane_change = self.params.get_bool("OneLaneChange")
     # a smoothed (slower) lane change must not be aborted mid-maneuver by the stock cap
     self.lane_change_time_extra = LEVEL_TIME_EXTRA[read_level(self.params)]
 
