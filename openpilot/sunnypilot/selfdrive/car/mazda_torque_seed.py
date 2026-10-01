@@ -29,7 +29,7 @@ def seed_mazda_torque_defaults(CP: structs.CarParams, params: Params | None = No
 
   if CP.brand != "mazda" or not (CP.flags & MazdaFlags.EPS_HW):
     return
-  if params.get("MazdaTorqueTuneSeeded") != MAZDA_STEER_TO_ZERO_TORQUE_TUNE:
+  if params.get("MazdaTorqueTuneSeeded") != MAZDA_STEER_TO_ZERO_TORQUE_TUNE and params.get("TorqueControlTune") is None:
     params.put("TorqueControlTune", MAZDA_STEER_TO_ZERO_TORQUE_TUNE, block=True)  # controlsd reads it at startup
     params.put("MazdaTorqueTuneSeeded", MAZDA_STEER_TO_ZERO_TORQUE_TUNE, block=True)
     cloudlog.warning("Seeded steer-to-zero Mazda TorqueControlTune=%s", MAZDA_STEER_TO_ZERO_TORQUE_TUNE)
