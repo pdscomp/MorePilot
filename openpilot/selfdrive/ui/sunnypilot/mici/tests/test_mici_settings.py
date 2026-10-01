@@ -336,6 +336,7 @@ class TestRoadEdgeLaneChange:
 
     params.put("AutoLaneChangeTimer", AutoLaneChangeMode.OFF, block=True)
     params.put_bool("AutoLaneChangeBsmDelay", False, block=True)
+    params.put_bool("OneLaneChange", False, block=True)
     params.put_bool("RoadEdgeLaneChangeEnabled", True, block=True)
     layout = SteeringLayoutMici()
     layout._update_state()

@@ -108,7 +108,6 @@ class SteeringLayoutMici(NavScroller):
                                                       "Turn on only if your car has the button."))
     self._mads_tja.set_enabled(ui_state.is_offroad)
     self._mads_tja.set_visible(self._is_mazda)
-    self._tq_mazda_v2_mode.set_visible(mazda_v2_ab_available(ui_state.params, ui_state.CP))
     self._mads_view = self._mads_settings_btn.link_sub_panel([self._mads_toggle, self._mads_main_cruise, self._mads_unified,
                                                               self._mads_steering, self._mads_tja])
 
@@ -265,15 +264,18 @@ class SteeringLayoutMici(NavScroller):
     # Hide the BSM delay when inactive without discarding the stored preference.
     lc_bsm = _on_off(ui_state.params.get_bool("AutoLaneChangeBsmDelay") and self._bsm_applies(alc_val))
     road_edge = _on_off(ui_state.params.get_bool("RoadEdgeLaneChangeEnabled"))
+    one_per_signal = _on_off(ui_state.params.get_bool("OneLaneChange"))
     lc_level = read_level(ui_state.params)
-    if alc_val <= AutoLaneChangeMode.OFF and lc_bsm == "off" and road_edge == "off" and lc_level == LEVEL_OFF:
+    if alc_val <= AutoLaneChangeMode.OFF and lc_bsm == "off" and road_edge == "off" and lc_level == LEVEL_OFF and one_per_signal == "off":
       self._lane_change_btn.set_disabled()
     else:
       auto_badge = _alc_label(alc_val) if alc_val > AutoLaneChangeMode.OFF else "off"
       self._lane_change_btn.set_badges([(tr("auto"), auto_badge), (tr("bsm-delay"), lc_bsm),
-                                        (tr("road-edge"), road_edge), (tr("smooth"), LC_LEVEL_LABELS[lc_level])])
+                                        (tr("road-edge"), road_edge), (tr("smooth"), LC_LEVEL_LABELS[lc_level]),
+                                        (tr("one-per-signal"), one_per_signal)])
 
     enforce_torque = self._enforce_torque = ui_state.params.get_bool("EnforceTorqueControl")
+    self._tq_mazda_v2_mode.set_visible(mazda_v2_ab_available(ui_state.params, ui_state.CP))
     jerk_aware = ui_state.params.get_bool("LateralJerkTorqueController")
     self_tune_on = ui_state.params.get_bool("LiveTorqueParamsToggle")
     custom_on = ui_state.params.get_bool("CustomTorqueParams")
