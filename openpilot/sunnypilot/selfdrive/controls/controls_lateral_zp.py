@@ -17,7 +17,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.lane_change_smoothing import La
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import LatControlTorque as LatControlTorqueV0
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v2 import LatControlTorque as LatControlTorqueV2
 from openpilot.sunnypilot.selfdrive.controls.lib.steer_limit import classify
-from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import resolved_tune_versions
+from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import resolved_mazda_v2_mode, resolved_tune_versions
 
 # how long lateral control has to be inactive, continuously, before the torque tune follows
 # a model change: a one-frame drop (a steer fault flicker) would otherwise swap and resume
@@ -98,7 +98,8 @@ class ControlsLateralZP:
       if version == 0.0:
         return LatControlTorqueV0(self.CP, self.CP_SP, CI, dt)
       if version == 2.0:
-        return LatControlTorqueV2(self.CP, self.CP_SP, CI, dt)
+        # the CX-5 TI A/B mode is reboot-applied at build time (MazdaTorqueV2Mode param)
+        return LatControlTorqueV2(self.CP, self.CP_SP, CI, dt, mazda_v2_mode=resolved_mazda_v2_mode(self.params, self.CP))
       return lac
 
     built = {version: build(version) for version in dict.fromkeys(versions.values())}

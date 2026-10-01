@@ -51,12 +51,12 @@ def lateral_extension_of(lac):
   disables the overrides, so this reads none there even with NNLC params set."""
   ext = getattr(lac, "extension", None)
   if ext is None or not ext.overrides_output:
-    return custom.LateralExtension.none
+    return custom.CarControlSP.LateralExtension.none
   if ext._nnlc_enabled:
-    return custom.LateralExtension.neuralNetwork
+    return custom.CarControlSP.LateralExtension.neuralNetwork
   if ext._jerk_aware_enabled:
-    return custom.LateralExtension.jerkAware
-  return custom.LateralExtension.none
+    return custom.CarControlSP.LateralExtension.jerkAware
+  return custom.CarControlSP.LateralExtension.none
 from openpilot.sunnypilot.selfdrive.controls.lib.turn_assist import TurnAssistController
 
 
@@ -137,6 +137,7 @@ class ControlsExt(ModelStateBase, ControlsLateralZP):
       CC_SP.params = build_param_dump(self.params)
       self._param_dump_pending = False
     CC_SP.zoompilot.lateralExtension = lateral_extension_of(getattr(self, "LaC", None))
+    CC_SP.torqueV2Mode = torque_v2_mode_of(getattr(self, "LaC", None))
 
     self.get_lead_data(CC_SP.leadOne, sm['radarState'].leadOne)
     self.get_lead_data(CC_SP.leadTwo, sm['radarState'].leadTwo)

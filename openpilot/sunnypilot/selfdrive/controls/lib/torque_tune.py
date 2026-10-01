@@ -9,6 +9,7 @@ See the LICENSE.md file in the root directory for more details.
 # controlsd_ext and the settings UIs. Imports nothing heavy so UI code can use it.
 
 import json
+from enum import IntEnum
 import math
 import os
 
@@ -62,6 +63,31 @@ def resolved_tune_versions(params, torque_lateral_tuning: bool = True) -> dict[b
   if not params.get_bool("EnforceTorqueControl"):
     return dict.fromkeys(TUNE_PARAM_BY_SIZE, 0.0 if torque_lateral_tuning else None)
   return stored_tune_versions(params)
+
+
+class MazdaTorqueV2Mode(IntEnum):
+  A = 0
+  B = 1
+
+
+def mazda_v2_ab_available(params, CP) -> bool:
+  return bool(
+    CP is not None
+    and CP.carFingerprint == "MAZDA_CX5"
+    and CP.steerAtStandstill
+    and params.get_bool("TorqueInterceptorEnabled")
+    and CP.lateralTuning.which() == "torque"
+    and resolved_tune_versions(params, True).get(False) == V2
+  )
+
+
+def resolved_mazda_v2_mode(params, CP) -> MazdaTorqueV2Mode:
+  if not mazda_v2_ab_available(params, CP):
+    return MazdaTorqueV2Mode.A
+  try:
+    return MazdaTorqueV2Mode(int(params.get("MazdaTorqueV2Mode", return_default=True)))
+  except (TypeError, ValueError):
+    return MazdaTorqueV2Mode.A
 
 
 def jerk_aware_has_effect(params) -> bool:
