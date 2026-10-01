@@ -6,14 +6,12 @@ silence a stock ECU can hand it back first. pandad blocks TX within ~100 ms of
 `started` dropping, which makes any shutdown-time deinit impossible: the hand-back
 must finish before the cycle is requested (docs/mazda-alpha-long-setup-teardown.md).
 
-Force-offroad ("Always Offroad") gets the same treatment: the UI writes
-OffroadModeRequested and card grants OffroadMode once the hand-back completes.
-Dropping straight to offroad mid-drive leaves the radar to recover through its ~5 s
-S3 timeout, and a radar that comes back that way mid-drive re-enters the bus in a
-degraded state: the body ECU then cycles MRCC availability (PEDALS.ACC_OFF flapping,
-CRZ_CTRL fault payloads) until the next ignition cycle, blocking cruise engagement
-(route 0000003a). hardwared grants the request directly when there is no onroad
-session to hand back from, or if card does not finish in time.
+Force-offroad ("Always Offroad") is owned by hardwared: HardwaredExt holds the
+OffroadModeRequested preference open, waits out the same hand-back through
+StockEcuHandBackGate, and is the only writer of OffroadMode. The monitor just
+stands down when it is requested - a second writer granting OffroadMode itself
+clears the request, which HardwaredExt reads as a withdrawal and exits the
+forced offroad one loop later, flapping ignition through pandad.
 
 For Mazda op-long the hand-back sequence is: assert CarControlSP.stockEcuHandBack
 -> carcontroller stops tester present and requests the radar's default session while
@@ -52,19 +50,6 @@ class AlphaLongToggleMonitor:
     self.params.put_bool("OnroadCycleRequested", True)
     self.done = True
 
-  def grant_offroad(self) -> None:
-    self.params.put_bool("OffroadMode", True)
-    self.params.put_bool("OffroadModeRequested", False)
-    self.done = True
-
-  def _finish(self, toggle_mismatch: bool) -> None:
-    # offroad wins over a pending toggle cycle: the session is ending either way and
-    # the next onroad start fingerprints with the current toggle value
-    if self.offroad_requested:
-      self.grant_offroad()
-    elif toggle_mismatch:
-      self.request_cycle()
-
   def update(self, CS: structs.CarState, CC: structs.CarControl, CC_SP: structs.CarControlSP) -> None:
     """Runs at 100 Hz from controls_update, before CI.apply."""
     if self.done:
@@ -79,13 +64,19 @@ class AlphaLongToggleMonitor:
         CC_SP.stockEcuHandBack = True
       return
     toggle_mismatch = self.CP.alphaLongitudinalAvailable and self.toggle_enabled != self.CP.openpilotLongitudinalControl
-    if not toggle_mismatch and not self.offroad_requested:
+    if not toggle_mismatch:
       self.handback_frames = 0
+      return
+    if self.offroad_requested:
+      # forced offroad wins over a pending toggle cycle, and hardwared owns it: the
+      # session is ending either way and the next onroad start fingerprints with the
+      # current toggle value. Standing down also keeps its hand-back gate in charge.
+      self.done = True
       return
 
     if self.CP.brand != "mazda" or not self.CP.openpilotLongitudinalControl:
       # nothing to tear down (enable direction, or a brand without a silenced ECU)
-      self._finish(toggle_mismatch)
+      self.request_cycle()
       return
 
     # wait out an active engagement before starting the hand-back; the UIs block both
@@ -98,4 +89,4 @@ class AlphaLongToggleMonitor:
     # accFaulted doubles as "stock radar heard" while op-long is active; once the
     # radar is broadcasting again the car is back to fully stock
     if CS.accFaulted or self.handback_frames >= HANDBACK_TIMEOUT_FRAMES:
-      self._finish(toggle_mismatch)
+      self.request_cycle()

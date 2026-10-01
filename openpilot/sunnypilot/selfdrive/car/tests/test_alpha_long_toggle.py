@@ -115,43 +115,21 @@ class TestAlphaLongToggleMonitor:
 
 
 class TestOffroadRequest:
-  def test_mazda_op_long_hands_back_before_granting(self):
-    m, params = _monitor(toggle=True, op_long=True, offroad_requested=True)
-    for _ in range(50):
+  """Force-offroad is hardwared's alone (HardwaredExt + StockEcuHandBackGate own the grant and
+  its hand-back): the monitor stands down so a second writer can't race the single owner."""
+
+  def test_monitor_grants_nothing(self):
+    m, params = _monitor(toggle=True, op_long=False, offroad_requested=True)  # mismatch, so it would act
+    for _ in range(HANDBACK_TIMEOUT_FRAMES + 10):
       cc_sp = _step(m)
-      assert cc_sp.stockEcuHandBack
-      assert not params.get_bool("OffroadMode")
-    _step(m, acc_faulted=True)
-    assert params.get_bool("OffroadMode")
-    assert not params.get_bool("OffroadModeRequested")
-    assert not params.get_bool("OnroadCycleRequested")
-
-  def test_handback_timeout_still_grants(self):
-    m, params = _monitor(toggle=True, op_long=True, offroad_requested=True)
-    for _ in range(HANDBACK_TIMEOUT_FRAMES):
-      _step(m)
-    assert params.get_bool("OffroadMode")
-
-  def test_non_mazda_grants_immediately(self):
-    m, params = _monitor(toggle=True, brand="toyota", op_long=True, offroad_requested=True)
-    cc_sp = _step(m)
-    assert not cc_sp.stockEcuHandBack
-    assert params.get_bool("OffroadMode")
-
-  def test_stock_long_grants_immediately(self):
-    m, params = _monitor(toggle=False, op_long=False, offroad_requested=True)
-    cc_sp = _step(m)
-    assert not cc_sp.stockEcuHandBack
-    assert params.get_bool("OffroadMode")
+      assert not cc_sp.stockEcuHandBack
+    assert not params.get_bool("OffroadMode")
+    assert params.get_bool("OffroadModeRequested")  # left open for hardwared
+    assert m.done
 
   def test_offroad_wins_over_pending_toggle_cycle(self):
-    # toggle-off and force-offroad both pending: go offroad, skip the cycle
+    # toggle-off and force-offroad both pending: hardwared ends the session, no cycle
     m, params = _monitor(toggle=False, op_long=True, offroad_requested=True)
     _step(m, acc_faulted=True)
-    assert params.get_bool("OffroadMode")
+    assert not params.get_bool("OffroadMode")
     assert not params.get_bool("OnroadCycleRequested")
-
-  def test_grant_works_when_alpha_unavailable(self):
-    m, params = _monitor(toggle=False, op_long=False, alpha_avail=False, offroad_requested=True)
-    _step(m)
-    assert params.get_bool("OffroadMode")
