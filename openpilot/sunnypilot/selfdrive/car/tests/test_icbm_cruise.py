@@ -18,18 +18,22 @@ from openpilot.common.params import Params
 from openpilot.selfdrive.car.cruise import VCruiseHelper, IMPERIAL_INCREMENT
 from openpilot.common.realtime import DT_CTRL
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.controller import (
-  IntelligentCruiseButtonManagement, REACT_DEADBAND, RESTORE_QUIET_TIME)
+  IntelligentCruiseButtonManagement, DRIVER_PRESS_GRACE_T, REACT_DEADBAND, RESTORE_QUIET_TIME)
 
 ButtonEvent = car.CarState.ButtonEvent
 ButtonType = car.CarState.ButtonEvent.Type
 State = custom.IntelligentCruiseButtonManagement.IntelligentCruiseButtonManagementState
 SendButtonState = custom.IntelligentCruiseButtonManagement.SendButtonState
+SessionState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
 
 MPH = CV.MPH_TO_KPH  # dash and v_cruise are tracked in kph; the CX-5 dash steps in whole mph
 
 
 def make_car_state(dash_kph=0., gas_pressed=False, button_events=None, available=True, v_ego=0.):
-  CS = car.CarState(cruiseState={"available": available, "speed": dash_kph * CV.KPH_TO_MS})
+  # US-cluster semantics: the PCM echo and the displayed number are the same
+  CS = car.CarState(cruiseState={"available": available,
+                                 "speed": dash_kph * CV.KPH_TO_MS,
+                                 "speedCluster": dash_kph * CV.KPH_TO_MS})
   CS.gasPressed = gas_pressed
   CS.vEgo = v_ego
   CS.buttonEvents = button_events or []
@@ -54,7 +58,8 @@ class TestSetpointReconcile:
     LP_SP.speedLimit.resolver.speedLimitLastValid = limit_kph > 0
     CC_SP = custom.CarControlSP()
     CC_SP.intelligentCruiseButtonManagement.state = icbm_state
-    self.v_cruise_helper.update_speed_limit_assist(False, LP_SP, CC_SP)
+    self.v_cruise_helper.update_plan_regime(LP_SP, CC_SP)
+    self.v_cruise_helper.update_speed_limit_assist(False, LP_SP)
     # the arbiter owns the session now: an "SLA active" regime is arbiter state, not
     # a longitudinalPlanSP echo
     arb = self.v_cruise_helper.cruise_arbiter
@@ -187,15 +192,24 @@ class TestServo:
   def setup_method(self):
     self.icbm = self.make_icbm()
 
-  def run_frames(self, target_mph, cluster_mph, n=1, source='sccVision', icbm=None, is_metric=False):
+  def run_frames(self, target_mph, cluster_mph, n=1, source='sccVision', icbm=None, is_metric=False,
+                 v_ego_mph=None, a_target=0., overshoot=False, session_state=SessionState.disabled,
+                 v_ahead_min_mph=0., button_events=None):
     icbm = icbm or self.icbm
     sends = []
-    for _ in range(n):
+    for i in range(n):
       CS = car.CarState(cruiseState={"speedCluster": cluster_mph * CV.MPH_TO_MS})
+      if v_ego_mph is not None:
+        CS.vEgo = float(v_ego_mph * CV.MPH_TO_MS)
+      if button_events and i == 0:
+        CS.buttonEvents = button_events
       CC = car.CarControl(enabled=True)
       LP_SP = custom.LongitudinalPlanSP(vTarget=target_mph * CV.MPH_TO_MS)
       LP_SP.longitudinalPlanSource = source
-      icbm.run(CS, CC, LP_SP, is_metric=is_metric)
+      LP_SP.aTarget = float(a_target)
+      LP_SP.smartCruiseControl.vision.vAheadMin = float(v_ahead_min_mph * CV.MPH_TO_MS)
+      icbm.run(CS, CC, LP_SP, is_metric=is_metric, decel_overshoot_enabled=overshoot,
+               session_state=session_state)
       sends.append(icbm.cruise_button)
     return sends
 
@@ -348,10 +362,11 @@ class TestDecelOvershoot:
 
   def test_commands_below_target_when_decelerating(self):
     icbm = self.make_icbm()
-    # planner wants -0.45 m/s^2 at 45 mph toward a 40 mph target: needs a ~6 mph gap below vEgo
+    # planner wants -0.45 m/s^2 at 45 mph toward a 40 mph target: gap_v asks ~8.5 mph below
+    # vEgo, leading the steady-state inverse to pay back the dash walk
     self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100)
-    assert icbm.v_target <= 39, icbm.v_target
-    assert icbm.v_target >= 37, icbm.v_target
+    assert icbm.v_target <= 37, icbm.v_target
+    assert icbm.v_target >= 35, icbm.v_target
 
   def test_deep_dip_is_a_no_op(self):
     """When the target is already far below vEgo the plant is saturated; never go deeper."""
@@ -381,3 +396,185 @@ class TestDecelOvershoot:
     icbm = self.make_icbm()
     self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100, enabled=False)
     assert icbm.v_target == 40, icbm.v_target
+
+
+class TestDecelOvershootIsALever:
+  """The overshoot commands the dash BELOW vEgo to buy real decel from the stock ACC. It
+  is a lever the servo pulls, not a destination, so it is only valid while the servo can
+  actually pull it and while the limiter that asked for it is still live. Both halves
+  were missing: a pending SLA confirm prompt banked a gap for its whole 5 s window and
+  the timeout dumped it as a SET- burst (user report 2026-08-29)."""
+
+  def make_icbm(self):
+    return IntelligentCruiseButtonManagement(car.CarParams(pcmCruise=True, brand="mazda"),
+                                             custom.CarParamsSP(pcmCruiseSpeed=False))
+
+  def run_frames(self, *args, **kwargs):
+    return TestServo.run_frames(self, *args, **kwargs)
+
+  def test_no_wind_up_behind_a_confirm_prompt(self):
+    """Layer 2: a limiter asking for decel while a prompt is open must not accumulate a
+    gap the servo is forbidden to emit."""
+    icbm = self.make_icbm()
+    self.run_frames(40, 40, n=60, icbm=icbm, overshoot=True)
+
+    sends = self.run_frames(40, 40, n=500, icbm=icbm, source='speedLimitAssist', v_ego_mph=41.3,
+                            a_target=-0.5, overshoot=True, session_state=SessionState.preActive)
+    assert icbm.overshoot_mph == 0., f"banked behind the freeze: {icbm.overshoot_mph}"
+    assert all(s == SendButtonState.none for s in sends)
+
+    # prompt times out with the limiter gone: nothing is owed, so nothing moves
+    sends = self.run_frames(40, 40, n=200, icbm=icbm, source='cruise', v_ego_mph=41.3, overshoot=True)
+    assert all(s == SendButtonState.none for s in sends), "stale gap dumped at the timeout"
+    assert icbm.state == State.holding
+
+  def test_freeze_does_not_blunt_a_real_limiter(self):
+    """Layer 2 must cost nothing: if the limiter is still asking for decel when the prompt
+    clears, the gap rebuilds at DECEL_OVERSHOOT_RISE and the descent still happens."""
+    icbm = self.make_icbm()
+    self.run_frames(40, 40, n=60, icbm=icbm, overshoot=True)
+    self.run_frames(40, 40, n=500, icbm=icbm, source='speedLimitAssist', v_ego_mph=41.3,
+                    a_target=-0.5, overshoot=True, session_state=SessionState.preActive)
+    assert icbm.overshoot_mph == 0.
+
+    sends = self.run_frames(40, 40, n=100, icbm=icbm, source='speedLimitAssist', v_ego_mph=41.3,
+                            a_target=-0.5, overshoot=True)
+    assert icbm.overshoot_mph > 2., f"gap did not rebuild: {icbm.overshoot_mph}"
+    # tap or hold is the profile's call from the remaining distance; either is a descent
+    down = (SendButtonState.decrease, SendButtonState.decreaseHold)
+    assert any(s in down for s in sends), "real limiter decel was blunted"
+
+  def test_residual_gap_after_source_flip_starts_no_descent(self):
+    """Layer 3: the lever outlives its limiter by design (slow release), but a residual
+    must not START a fresh descent once the plan is back on cruise. Set directly: the
+    gate is a single boolean and the state that reaches it is what matters."""
+    icbm = self.make_icbm()
+    self.run_frames(40, 40, n=60, icbm=icbm)
+    icbm.overshoot_mph = 5.  # left over from a curve that just ended
+
+    # off-limiter the residual drops at the build rate; check inside the bleed window
+    sends = self.run_frames(40, 40, n=40, icbm=icbm, source='cruise', v_ego_mph=41.3, overshoot=True)
+    assert icbm.overshoot_mph > 0., "precondition: the residual is still bleeding off"
+    assert icbm.state == State.holding, f"descended on a residual: {icbm.state}"
+    assert all(s == SendButtonState.none for s in sends)
+    sends = self.run_frames(40, 40, n=60, icbm=icbm, source='cruise', v_ego_mph=41.3, overshoot=True)
+    assert icbm.overshoot_mph == 0., "the residual must clear at the build rate once on cruise"
+    assert all(s == SendButtonState.none for s in sends)
+
+  def test_plain_setpoint_correction_still_unconditional(self):
+    """Layer 3 must stay narrow: with no overshoot in play, a dash sitting above the
+    driver's setpoint is a plain residual (a dropped press) and still self-heals."""
+    icbm = self.make_icbm()
+    self.run_frames(40, 40, n=60, icbm=icbm, source='cruise')
+
+    sends = self.run_frames(40, 42, n=100, icbm=icbm, source='cruise')
+    assert any(s == SendButtonState.decrease for s in sends), "dash residual stranded high"
+
+
+class TestRestoreResponsiveness(TestServo):
+  """Route 126 fixes: the quiet timer keys on the raw plan target (the overshoot lever's
+  decay is not plan motion), the vision lookahead replaces stillness when present, and a
+  genuine driver SET+ press parks down-moves for a grace window."""
+
+  def test_restore_not_stalled_by_overshoot_decay(self):
+    """After a limiter release with a built-up overshoot gap, the restore must start about
+    a quiet-window after the flip, not after the residual finishes bleeding off."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(40, 40, n=60, icbm=icbm, v_ego_mph=40., overshoot=True)
+    # curve: deep decel demand builds the full gap and walks the dash down
+    self.run_frames(30, 31, n=100, icbm=icbm, v_ego_mph=39., a_target=-1.2, overshoot=True)
+    assert icbm.overshoot_mph > 5.
+
+    # road straightens: source back to cruise, target back at the driver's 40
+    first_up = None
+    for i in range(400):
+      sends = self.run_frames(40, 31, n=1, icbm=icbm, source='cruise', v_ego_mph=33., overshoot=True)
+      if sends[0] == SendButtonState.increase or sends[0] == SendButtonState.increaseHold:
+        first_up = i * DT_CTRL
+        break
+    assert first_up is not None, "restore never started"
+    assert first_up < RESTORE_QUIET_TIME + 0.6, f"restore stalled {first_up:.2f}s behind the decay"
+
+  def test_lookahead_dip_blocks_restore(self):
+    """A dip below the target on the vision horizon holds the restore regardless of how
+    quiet the target is: restoring between bends feeds the next apex."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(40, 40, n=60, icbm=icbm)
+    sends = self.run_frames(40, 30, n=300, icbm=icbm, source='cruise', v_ahead_min_mph=25.)
+    assert all(s == SendButtonState.none for s in sends)
+    assert icbm.state == State.holding
+
+  def test_lookahead_clear_skips_quiet_window(self):
+    """With the horizon clear the profile is the churn oracle; stillness is redundant and
+    the restore fires on the react timer alone."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(40, 40, n=60, icbm=icbm)
+    first_up = None
+    for i in range(200):
+      sends = self.run_frames(40, 30, n=1, icbm=icbm, source='cruise', v_ahead_min_mph=255. / CV.MPH_TO_MS)
+      if sends[0] in (SendButtonState.increase, SendButtonState.increaseHold):
+        first_up = i * DT_CTRL
+        break
+    assert first_up is not None
+    assert first_up < RESTORE_QUIET_TIME, f"lookahead-clear restore still waited {first_up:.2f}s"
+
+  def test_dip_appearing_mid_restore_aborts(self):
+    """The commit gate trails the profile; a dip appearing while stepping up must stop the
+    restore instead of accelerating until the limiter takes the source."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(40, 40, n=60, icbm=icbm)
+    self.run_frames(40, 34, n=150, icbm=icbm, source='cruise', v_ahead_min_mph=200.)
+    assert icbm.state == State.increasing
+
+    sends = self.run_frames(40, 35, n=100, icbm=icbm, source='cruise', v_ahead_min_mph=25.)
+    assert icbm.state == State.holding
+    assert all(s == SendButtonState.none for s in sends[5:])
+
+  def test_driver_up_press_grace_blocks_down(self):
+    """A genuine SET+ press parks synthesized down-moves for the grace window even while a
+    limiter demands them; the servo resumes once the window expires."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(40, 40, n=60, icbm=icbm)
+    press = [ButtonEvent(type=ButtonType.accelCruise, pressed=True)]
+    release = [ButtonEvent(type=ButtonType.accelCruise, pressed=False)]
+    self.run_frames(30, 40, n=5, icbm=icbm, button_events=press)
+    self.run_frames(30, 45, n=1, icbm=icbm, button_events=release)
+
+    quiet, resumed = [], []
+    for i in range(int(DRIVER_PRESS_GRACE_T / DT_CTRL) + 200):
+      sends = self.run_frames(30, 45, n=1, icbm=icbm, a_target=-1.0)
+      (quiet if i * DT_CTRL < DRIVER_PRESS_GRACE_T - 0.1 else resumed).extend(sends)
+    assert all(s == SendButtonState.none for s in quiet), "servo fought the driver inside the grace window"
+    assert any(s in (SendButtonState.decrease, SendButtonState.decreaseHold) for s in resumed), \
+      "servo never resumed after the grace window"
+
+  def test_driver_down_press_ends_grace(self):
+    """A SET- press is aligned intent and cancels the SET+ grace immediately."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(40, 40, n=60, icbm=icbm)
+    self.run_frames(30, 40, n=5, icbm=icbm, button_events=[ButtonEvent(type=ButtonType.accelCruise, pressed=True)])
+    self.run_frames(30, 45, n=1, icbm=icbm, button_events=[ButtonEvent(type=ButtonType.accelCruise, pressed=False)])
+    self.run_frames(30, 45, n=3, icbm=icbm, button_events=[ButtonEvent(type=ButtonType.decelCruise, pressed=True)])
+    self.run_frames(30, 45, n=1, icbm=icbm, button_events=[ButtonEvent(type=ButtonType.decelCruise, pressed=False)])
+    assert icbm.down_grace_timer == 0
+
+    sends = self.run_frames(30, 45, n=150, icbm=icbm)
+    assert any(s in (SendButtonState.decrease, SendButtonState.decreaseHold) for s in sends)
+
+  def test_driver_down_press_grace_blocks_up(self):
+    """The mirror: after a genuine SET- press a refused re-anchor must not restore the
+    baseline over the driver's head, even with the lookahead clear."""
+    icbm = self.make_icbm(brand="mazda")
+    self.run_frames(40, 40, n=60, icbm=icbm, source='cruise')
+    self.run_frames(40, 40, n=5, icbm=icbm, source='cruise',
+                    button_events=[ButtonEvent(type=ButtonType.decelCruise, pressed=True)])
+    self.run_frames(40, 35, n=1, icbm=icbm, source='cruise',
+                    button_events=[ButtonEvent(type=ButtonType.decelCruise, pressed=False)])
+
+    quiet, resumed = [], []
+    for i in range(int(DRIVER_PRESS_GRACE_T / DT_CTRL) + 300):
+      sends = self.run_frames(40, 35, n=1, icbm=icbm, source='cruise', v_ahead_min_mph=200.)
+      (quiet if i * DT_CTRL < DRIVER_PRESS_GRACE_T - 0.1 else resumed).extend(sends)
+    assert all(s == SendButtonState.none for s in quiet), "servo restored over the driver's SET-"
+    assert any(s in (SendButtonState.increase, SendButtonState.increaseHold) for s in resumed), \
+      "restore never resumed after the grace window"

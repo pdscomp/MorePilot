@@ -1,7 +1,7 @@
 """
-Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
+Copyright (c) 2026-, Zeph Leggett.
 
-This file is part of sunnypilot and is licensed under the MIT License.
+This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 
 Closed-loop integration tests for the ICBM + SLA + driver-setpoint stack.
@@ -57,17 +57,17 @@ HOLD_TRAILING_RATE = 0.15
 class FakeMazdaEcu:
   """The body ECU's cruise set-speed integrator, driven at 100 Hz.
 
-  hold_mode models the open question of how a real ECU integrates SYNTHESIZED holds
-  (forged button-down frames interleaved with the wheel's genuine button-up frames):
-    'snap':    integrates them like a physical hold: 5 mph grid steps (best case)
-    'taps':    registers them as paced discrete presses: same net progress as taps
-    'ignored': rejects them outright: zero movement (worst case; must trip the fallback)
+  A genuine physical hold (the wheel) grid-snaps 5 mph. Synthesized streams never do:
+  measured across all 116 recorded routes, every servo-driven dash step was 1 mph (the
+  wheel's own button-up frames interleave with the forged ones). forged_mode:
+    'taps':    the measured reality: forged frames register as paced discrete presses
+    'ignored': rejects them outright: zero movement (must trip the tap fallback)
   """
 
-  def __init__(self, dash_mph, seed=0, hold_mode='snap'):
+  def __init__(self, dash_mph, seed=0, forged_mode='taps'):
     self.dash = dash_mph
     self.rng = random.Random(seed)
-    self.hold_mode = hold_mode
+    self.forged_mode = forged_mode
     self.t = 0.
     self.last_tap_t = -1.
     self.hold_dir = 0
@@ -88,14 +88,19 @@ class FakeMazdaEcu:
     grid = 5 * ((self.dash // 5) + (1 if direction > 0 else 0)) if self.dash % 5 else self.dash + 5 * direction
     return grid - self.dash if self.dash % 5 else 5 * direction
 
-  def tick(self, tap_dir=0, hold_dir=0):
-    """tap_dir/hold_dir: -1/0/+1 for this 10 ms tick. Returns current dash (mph)."""
+  def tick(self, tap_dir=0, hold_dir=0, forged_hold_dir=0):
+    """tap_dir: paced presses (driver taps or servo taps). hold_dir: the driver's
+    PHYSICAL hold (grid-snaps). forged_hold_dir: the servo's synthesized stream
+    (registers per forged_mode). -1/0/+1 for this 10 ms tick; returns dash (mph)."""
     self.t += DT_CTRL
 
     if tap_dir != 0:
       self._register_tap(tap_dir)
 
-    if hold_dir != 0 and self.hold_mode == 'snap':
+    if forged_hold_dir != 0 and self.forged_mode == 'taps':
+      self._register_tap(forged_hold_dir)
+
+    if hold_dir != 0:
       if self.hold_dir != hold_dir:
         self.hold_dir, self.hold_t, self.hold_steps = hold_dir, 0., 0
       self.hold_t += DT_CTRL
@@ -103,10 +108,6 @@ class FakeMazdaEcu:
       if self.hold_t >= due:
         self.pending.append((self.t + TAP_LATENCY_S, 'snap' if self.hold_steps == 0 else 5 * hold_dir))
         self.hold_steps += 1
-    elif hold_dir != 0 and self.hold_mode == 'taps':
-      self._register_tap(hold_dir)
-    elif hold_dir != 0:  # 'ignored'
-      pass
     else:
       if self.hold_dir != 0 and self.hold_steps > 0 and self.rng.random() < HOLD_TRAILING_RATE:
         self.pending.append((self.t + TAP_LATENCY_S, 5 * self.hold_dir))
@@ -133,7 +134,7 @@ class Loop:
   selfdrived->card (carControlSP) hops keep their one-cycle transport delay, and the
   mirror consumes the session snapshot from the previous frame, as plannerd would."""
 
-  def __init__(self, baseline_mph=60, seed=0, hold_mode='snap'):
+  def __init__(self, baseline_mph=60, seed=0, forged_mode='taps'):
     params = Params()
     params.put("IsReleaseSpBranch", True, block=True)
     params.put("SpeedLimitMode", int(Mode.assist), block=True)
@@ -146,12 +147,19 @@ class Loop:
     self.sla = self.helper.cruise_arbiter  # 100 Hz session truth; .state as before
     self.mirror = SpeedLimitAssistMirror(CP, CP_SP)  # plannerd side: plan cap + events
     self.servo = IntelligentCruiseButtonManagement(CP, CP_SP)
-    self.ecu = FakeMazdaEcu(baseline_mph, seed=seed, hold_mode=hold_mode)
+    self.ecu = FakeMazdaEcu(baseline_mph, seed=seed, forged_mode=forged_mode)
+    self.lookahead_mph = None
     self.events_sp = EventsSP()
 
     self.tick_n = 0
     self.limit_mph = 0.
     self.scc_dip_mph = 0.  # SCC-vision target when active, 0 = inactive
+    # vEgo defaults to the set speed (enough for the button-timing scenarios). Override it,
+    # plus a_target, to exercise decel overshoot: the servo only builds the gap when the
+    # plan is asking for real decel AND the car is above the plan target.
+    self.v_ego_mph = None
+    self.a_target = 0.
+    self.decel_overshoot = False
     self.driver_queue = {}  # tick -> (ButtonType, hold_ticks)
     self._driver_active = None  # (button, remaining_ticks)
     self.sla_events = []  # (tick, event int) emitted by SLA, across the whole run
@@ -168,7 +176,8 @@ class Loop:
     CS = car.CarState(cruiseState={"available": True,
                                    "speed": self.ecu.dash * MPH_MS,
                                    "speedCluster": self.ecu.dash * MPH_MS})
-    CS.vEgo = float(self.helper.v_cruise_kph * CV.KPH_TO_MS)  # cruising at set speed; enough for these scenarios
+    v_ego_mph = self.v_ego_mph if self.v_ego_mph is not None else self.helper.v_cruise_kph / MPH_KPH
+    CS.vEgo = float(v_ego_mph * MPH_MS)
     CS.buttonEvents = button_events or []
     return CS
 
@@ -183,6 +192,11 @@ class Loop:
     source = min(targets, key=lambda k: targets[k])
     LP_SP.longitudinalPlanSource = source
     LP_SP.vTarget = float(targets[source])
+    # vision lookahead wire: 0 = no lookahead (default for these tests); a test can set
+    # lookahead_mph to model the horizon seeing a dip beyond the current source flip
+    if self.lookahead_mph is not None:
+      LP_SP.smartCruiseControl.vision.vAheadMin = float(self.lookahead_mph * MPH_MS)
+    LP_SP.aTarget = float(self.a_target)
     LP_SP.speedLimit.assist.state = self.mirror.state
     LP_SP.speedLimit.resolver.speedLimit = self.limit_mph * MPH_MS
     LP_SP.speedLimit.resolver.speedLimitFinalLast = self.limit_mph * MPH_MS
@@ -197,7 +211,8 @@ class Loop:
   # -- per-layer ticks -----------------------------------------------------------------
   def _card_tick(self, CS=None, enabled=True, lp_msg=None, cc_msg=None):
     CS = CS if CS is not None else self._cs()
-    self.helper.update_speed_limit_assist(False, lp_msg or self._lp_sp(), cc_msg or self._cc_sp())
+    self.helper.update_plan_regime(lp_msg or self._lp_sp(), cc_msg or self._cc_sp())
+    self.helper.update_speed_limit_assist(False, lp_msg or self._lp_sp())
     self.helper.update_v_cruise(CS, enabled=enabled, is_metric=False)
 
   def run(self, seconds, assert_each=None):
@@ -242,14 +257,15 @@ class Loop:
         self.helper.cruise_arbiter.fill_msg(session_msg)
         self.events_sp.clear()
         v_ego_mph = self.v_ego_mph if self.v_ego_mph is not None else self.helper.v_cruise_kph / MPH_KPH
-        self.mirror.update(session_msg.cruiseSession, v_ego_mph * MPH_MS, 0., 0., self.events_sp)
+        self.mirror.update(session_msg.zoompilot.cruiseSession, v_ego_mph * MPH_MS, 0., 0., self.events_sp)
         self.sla_events.extend((self.tick_n, e) for e in self.events_sp.events)
 
       # selfdrived: servo against the real dash; the session state it sees is one
       # message hop old (carStateSP published at the end of the previous card frame)
       session_state_stale = self.helper.cruise_arbiter.state
       CC = car.CarControl(enabled=True)
-      self.servo.run(CS, CC, lp_msg, is_metric=False, session_state=session_state_stale)
+      self.servo.run(CS, CC, lp_msg, is_metric=False, decel_overshoot_enabled=self.decel_overshoot,
+                     session_state=session_state_stale)
 
       # card: arbiter (classification + session) runs inside update_v_cruise,
       # synchronous with the buttons
@@ -258,7 +274,7 @@ class Loop:
       # ECU: driver's physical press + openpilot's emission. Card vetoes emission with
       # same-frame session state (the servo's own freeze is one hop stale), as
       # card.controls_update does before CI.apply.
-      tap_dir, hold_dir = driver_tap_dir, driver_hold_dir
+      tap_dir, forged_hold_dir = driver_tap_dir, 0
       sb = self.servo.cruise_button
       if self.helper.cruise_arbiter.prompting:
         sb = SendButtonState.none
@@ -267,10 +283,10 @@ class Loop:
       elif sb == SendButtonState.decrease:
         tap_dir = tap_dir or -1
       elif sb == SendButtonState.increaseHold:
-        hold_dir = hold_dir or 1
+        forged_hold_dir = 1
       elif sb == SendButtonState.decreaseHold:
-        hold_dir = hold_dir or -1
-      self.ecu.tick(tap_dir=tap_dir, hold_dir=hold_dir)
+        forged_hold_dir = -1
+      self.ecu.tick(tap_dir=tap_dir, hold_dir=driver_hold_dir, forged_hold_dir=forged_hold_dir)
 
       if assert_each is not None:
         assert_each(self)
@@ -299,18 +315,21 @@ class TestCurveRestore:
     assert loop.v_cruise_mph == 60, f"baseline corrupted: {loop.v_cruise_mph}"
 
   def test_dip_train_does_not_churn(self):
-    """Back-to-back dips: the restore patience must hold the dash down between them."""
+    """Back-to-back dips with the horizon in view: the lookahead veto must hold the
+    dash down through the gap (the second dip is visible before its source commits)."""
     loop = Loop(baseline_mph=60, seed=2)
+    loop.lookahead_mph = 55  # the vision profile sees the dip train the whole time
     loop.scc_dip_mph = 55
     loop.run(5.0)
     dash_after_first = loop.ecu.dash
 
     loop.scc_dip_mph = 0.
-    loop.run(1.5)  # gap shorter than the quiet window
+    loop.run(1.5)  # gap between commits; the dip is still on the horizon
     assert loop.ecu.dash == dash_after_first, "servo restored between back-to-back dips"
     loop.scc_dip_mph = 55
     loop.run(3.0)
     loop.scc_dip_mph = 0.
+    loop.lookahead_mph = 255. / MPH_MS  # horizon clear
     loop.run(12.0)
     assert loop.ecu.dash == 60
 
@@ -369,7 +388,7 @@ class TestSlaSession:
   def test_holds_read_as_taps_still_reaches_limit(self):
     """An ECU that registers synthesized holds as paced presses: same net progress as
     taps and no fault needed; the session still lands the limit."""
-    loop = Loop(baseline_mph=60, seed=6, hold_mode='taps')
+    loop = Loop(baseline_mph=60, seed=6)
     self._confirm_lower(loop, limit=45)
 
     loop.run(15.0)
@@ -379,11 +398,11 @@ class TestSlaSession:
   def test_holds_ignored_faults_and_taps_land(self):
     """An ECU that rejects synthesized holds outright: zero movement must trip the
     long-press fallback, and the session still lands the limit on taps."""
-    loop = Loop(baseline_mph=60, seed=7, hold_mode='ignored')
+    loop = Loop(baseline_mph=60, seed=7, forged_mode='ignored')
     self._confirm_lower(loop, limit=45)
 
     loop.run(15.0)
-    assert loop.servo.longpress_faulted
+    assert loop.servo.fast_faulted
     assert loop.ecu.dash == 45, f"taps fallback never landed: {loop.ecu.dash}"
     assert loop.sla.state == SlaState.active
 
@@ -459,6 +478,27 @@ class TestDriverInteractions:
     loop.run(6.0)
     assert loop.sla.state == SlaState.inactive
     assert loop.ecu.dash % 5 == 0 and loop.ecu.dash >= 50, f"no grid climb: {loop.ecu.dash}"
+    assert loop.v_cruise_mph == loop.ecu.dash, \
+      f"setpoint must re-anchor to the ECU result: dash {loop.ecu.dash}, setpoint {loop.v_cruise_mph}"
+    dash_settled = loop.ecu.dash
+    loop.run(4.0)
+    assert loop.ecu.dash == dash_settled, "servo fought the driver's hold result"
+
+  def test_settled_longpress_descends_and_reanchors(self):
+    """The mirror exit: settled at the limit, the driver HOLDS - to ride below it. The
+    press dismisses the session, the ECU grid-descends, the setpoint re-anchors to the
+    result, and the SET- grace keeps the servo from restoring the old baseline over it."""
+    loop = Loop(baseline_mph=60, seed=14)
+    loop.limit_mph = 45
+    loop.run(2.0)
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)
+    loop.run(11.0)
+    assert loop.ecu.dash == 45
+
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1, hold_s=1.3)
+    loop.run(6.0)
+    assert loop.sla.state == SlaState.inactive
+    assert loop.ecu.dash % 5 == 0 and loop.ecu.dash <= 40, f"no grid descent: {loop.ecu.dash}"
     assert loop.v_cruise_mph == loop.ecu.dash, \
       f"setpoint must re-anchor to the ECU result: dash {loop.ecu.dash}, setpoint {loop.v_cruise_mph}"
     dash_settled = loop.ecu.dash
@@ -659,3 +699,64 @@ class TestDriverInteractions:
     loop.run(14.0)
     assert loop.ecu.dash == 60, f"restore stopped short: {loop.ecu.dash}"
     assert loop.v_cruise_mph == 60
+
+
+class TestPromptFreezeOvershoot:
+  """User report 2026-08-29 (routes ...acdc83b60f/3 and ...821e28d2fa/12): engaging near a
+  known limit dropped the set speed 2-4 mph roughly 5 s later, then walked it back.
+
+  The prompt's own freeze produced it. Capping the plan at the cluster round-tripped
+  through whole mph and landed ~7 mm/s under v_cruise, so SLA won the plan min() by
+  rounding error and relabelled the source as a limiter. That armed decel overshoot
+  against an ordinary cruise convergence, the servo's freeze banked the resulting gap
+  for the whole 5 s window, and the timeout dumped it as a SET- burst."""
+
+  def test_ignored_prompt_never_moves_the_dash(self):
+    """The reported drive: engaged at 40 with a 45 target, car 1.3 mph over the setpoint,
+    prompt left unanswered. Nothing may move -- during the prompt or after it times out."""
+    loop = Loop(baseline_mph=40, seed=31)
+    loop.decel_overshoot = True
+    loop.v_ego_mph = 41.3
+    loop.a_target = -0.5  # the plan converging on the setpoint the car is sitting above
+    loop.limit_mph = 45
+    loop.run(1.0)
+    assert loop.sla.state == SlaState.preActive
+
+    def never_moves(lo):
+      assert lo.ecu.dash == 40, f"dash moved at tick {lo.tick_n}: {lo.ecu.dash}"
+      assert lo.servo.overshoot_mph == 0., f"overshoot banked behind the freeze: {lo.servo.overshoot_mph}"
+
+    loop.run(10.0, assert_each=never_moves)  # 5 s prompt + timeout + the restore window
+    assert loop.sla.state == SlaState.inactive
+    assert loop.v_cruise_mph == 40
+
+  def test_prompt_does_not_relabel_the_plan_source(self):
+    """Layer 1 in isolation: prompting from idle must leave the plan on `cruise`. A cap
+    equal to the baseline changes no speed but does change the source, and the source is
+    what arms the overshoot."""
+    loop = Loop(baseline_mph=40, seed=32)
+    loop.v_ego_mph = 41.3
+    loop.limit_mph = 45
+    loop.run(1.0)
+    assert loop.sla.state == SlaState.preActive
+
+    def stays_cruise(lo):
+      if lo.sla.prompting:
+        assert lo._lp_sp().longitudinalPlanSource == PlanSource.cruise, "prompt relabelled the plan source"
+
+    loop.run(4.0, assert_each=stays_cruise)
+
+  def test_session_hold_still_freezes_an_active_session(self):
+    """Layer 1 must not cost the freeze its real job: prompting OUT OF an active session
+    still holds that session's cap, so the dash cannot restore un-confirmed."""
+    loop = Loop(baseline_mph=48, seed=33)
+    loop.limit_mph = 40
+    loop.run(2.0)
+    loop.driver_press(ButtonType.decelCruise, in_seconds=0.1)
+    loop.run(11.0)
+    assert loop.ecu.dash == 40
+
+    loop.limit_mph = 45  # a limit change out of an active session re-prompts
+    loop.run(0.5)
+    assert loop.sla.state == SlaState.preActive
+    assert loop.sla.v_cap < 45 * MPH_MS, f"active-session hold released: {loop.sla.v_cap}"
