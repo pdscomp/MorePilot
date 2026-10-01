@@ -533,7 +533,7 @@ class SelfdriveD(CruiseHelper):
         self.experimental_mode_switched = False
 
     self.icbm.run(CS, self.sm['carControl'], self.sm['longitudinalPlanSP'], self.is_metric,
-                  self.smart_cruise_decel_overshoot, self.sm['carStateSP'].cruiseSession.state)
+                  self.smart_cruise_decel_overshoot, self.sm['carStateSP'].zoompilot.cruiseSession.state)
 
   def data_sample(self):
     _car_state = messaging.recv_one(self.car_state_sock)
