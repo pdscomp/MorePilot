@@ -127,7 +127,7 @@ class TestPlatformCapability(OpenpilotTestCase):
     params.put("CarParamsPersistent", CP.to_bytes(), block=True)
     return params
 
-  def _ab_available(self, platform: str = "MAZDA_CX5_2022", *, ti: bool = True, steer_at_standstill: bool = True,
+  def _ab_available(self, platform: str = "MAZDA_CX5", *, ti: bool = True, steer_at_standstill: bool = True,
                     torque_tuning: bool = True, tune_version: float = 2.0, bundle_platform: str | None = None) -> bool:
     params = self._params_with_cp(platform, steer_at_standstill=steer_at_standstill, torque_tuning=torque_tuning)
     params.put_bool("TorqueInterceptorEnabled", ti, block=True)
@@ -149,14 +149,13 @@ class TestPlatformCapability(OpenpilotTestCase):
   def test_mazda_torque_v2_ab_availability_truth_table(self):
     cases = [
       ("eligible", {}, True),
-      ("pre_2022_cx5", {"platform": "MAZDA_CX5"}, False),
+      ("native_cx5_2022", {"platform": "MAZDA_CX5_2022"}, False),
       ("cx8", {"platform": "MAZDA_CX8_2022"}, False),
       ("ti_off", {"ti": False}, False),
       ("non_stz", {"steer_at_standstill": False}, False),
       ("non_torque", {"torque_tuning": False}, False),
       ("non_v2", {"tune_version": 1.0}, False),
-      # the gate follows the CP (the real car), not the display-only bundle platform
-      ("bundle_pre_2022_but_cp_is_2022", {"platform": "MAZDA_CX5_2022", "bundle_platform": "MAZDA_CX5"}, True),
+      ("bundle_cx5_native_2022", {"platform": "MAZDA_CX5_2022", "bundle_platform": "MAZDA_CX5"}, False),
     ]
     for name, kwargs, expected in cases:
       with self.subTest(name=name):

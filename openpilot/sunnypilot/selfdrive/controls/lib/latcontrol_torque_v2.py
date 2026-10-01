@@ -174,7 +174,7 @@ class LatControlTorque(LatControlTorqueV0):
     self.jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
     self._ti_lsf_scaled = CP.steerAtStandstill and CP.brand == 'mazda'
     mazda_v2_ab_eligible = (
-      CP.brand == "mazda" and CP.carFingerprint == "MAZDA_CX5_2022" and CP.steerAtStandstill and
+      CP.brand == "mazda" and CP.carFingerprint == "MAZDA_CX5" and CP.steerAtStandstill and
       CP.flags & MazdaFlags.TORQUE_INTERCEPTOR
     )
     self.mazda_v2_mode = None
