@@ -283,6 +283,19 @@
                   ]
                 }
               ]
+            },
+            {
+              "key": "LowSpeedTurnAssist",
+              "widget": "toggle",
+              "title": "Low-Speed Turn Assist",
+              "description": "Steer through slow, signaled turns; hold the wheel wound at intersections and start turning on time instead of going wide. Active below 10 mph with the turn signal on. Unavailable while lateral control is paused on blinker.",
+              "enablement": [
+                {
+                  "type": "param",
+                  "key": "BlinkerPauseLateralControl",
+                  "equals": false
+                }
+              ]
             }
           ]
         },
@@ -543,30 +556,65 @@
                   ]
                 },
                 {
-                  "key": "MazdaTorqueV2Mode",
-                  "widget": "multiple_button",
-                  "title": "CX-5 Torque v2 A/B",
-                  "description": "A keeps the current controller. B uses the experimental 5\u201310 m/s low-speed retaper. Maximum steering authority is unchanged. Reboot after changing.",
-                  "options": [
-                    {
-                      "value": 0,
-                      "label": "A (Current)"
-                    },
-                    {
-                      "value": 1,
-                      "label": "B (Low-speed retaper)"
-                    }
-                  ],
+                  "key": "TorqueTuneV2PredictiveTurnIn",
+                  "widget": "toggle",
+                  "title": "Predictive Turn-In (Alpha)",
+                  "description": "Starts steering into curves slightly earlier by anticipating the planned steering, compensating for the car's steering response delay. Only available with the v2.0 tune. Takes effect on the next drive.",
                   "visibility": [
                     {
-                      "type": "capability",
-                      "field": "mazda_torque_v2_ab_available",
-                      "equals": true
+                      "type": "all",
+                      "conditions": [
+                        {
+                          "type": "param",
+                          "key": "EnforceTorqueControl",
+                          "equals": true
+                        },
+                        {
+                          "type": "any",
+                          "conditions": [
+                            {
+                              "type": "param",
+                              "key": "TorqueControlTune",
+                              "equals": 2.0
+                            },
+                            {
+                              "type": "param",
+                              "key": "TorqueControlTuneBig",
+                              "equals": 2.0
+                            }
+                          ]
+                        }
+                      ]
                     }
                   ],
                   "enablement": [
                     {
-                      "type": "offroad_only"
+                      "type": "all",
+                      "conditions": [
+                        {
+                          "type": "param",
+                          "key": "EnforceTorqueControl",
+                          "equals": true
+                        },
+                        {
+                          "type": "any",
+                          "conditions": [
+                            {
+                              "type": "param",
+                              "key": "TorqueControlTune",
+                              "equals": 2.0
+                            },
+                            {
+                              "type": "param",
+                              "key": "TorqueControlTuneBig",
+                              "equals": 2.0
+                            }
+                          ]
+                        },
+                        {
+                          "type": "offroad_only"
+                        }
+                      ]
                     }
                   ]
                 }
