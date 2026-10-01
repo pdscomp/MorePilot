@@ -73,7 +73,7 @@ class MazdaTorqueV2Mode(IntEnum):
 def mazda_v2_ab_available(params, CP) -> bool:
   return bool(
     CP is not None
-    and CP.carFingerprint == "MAZDA_CX5"
+    and CP.carFingerprint == "MAZDA_CX5_2022"
     and CP.steerAtStandstill
     and params.get_bool("TorqueInterceptorEnabled")
     and CP.lateralTuning.which() == "torque"

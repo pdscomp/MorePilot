@@ -214,6 +214,7 @@ class Loop:
     self.helper.update_plan_regime(lp_msg or self._lp_sp(), cc_msg or self._cc_sp())
     self.helper.update_speed_limit_assist(False, lp_msg or self._lp_sp())
     self.helper.update_v_cruise(CS, enabled=enabled, is_metric=False)
+    self.helper.reconcile_setpoint_with_dash(CS)  # CardExt.update_v_cruise_post in production
 
   def run(self, seconds, assert_each=None):
     for _ in range(int(seconds / DT_CTRL)):

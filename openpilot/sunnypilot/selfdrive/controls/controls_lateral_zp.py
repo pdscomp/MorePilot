@@ -33,11 +33,10 @@ TI_TUNE_SEEDS = {
   "LiveTorqueParamsToggle": True,       # "Self-Tune": defaults OFF upstream, we want it learning
   "LaneChangeSmoothing": 2,              # Medium pace; the key is an option index, not a bool
   "LowSpeedTurnAssist": True,           # TI cars steer at standstill, so low-speed assist works
-  # Owner-validated on the CX-8 (tracking RMSE -35%, override share halved vs static).
-  # CX-5 matches its own exact NN model; the CX-8 fuzzy-matches MAZDA_CX5_2022's
-  # (similarity 0.93, field-validated). Gate still requires a model match — cars
-  # without one simply keep the PID path.
-  "NeuralNetworkLateralControl": True,
+  # NNLC deliberately unseeded: the UI treats EnforceTorqueControl+NNLC as mutually
+  # exclusive and wipes BOTH when both are set, which would silently strand the car on
+  # v0. v2 structurally ignores the NNLC overrides anyway. Toggling NNLC on manually
+  # clears Enforce and gives the coherent v0+NNLC mode.
 }
 # No delay seed on either TI platform: the owner has preferred both modes at different
 # times ("Live Delay" in Aug, fixed 0.05 in the current NNLC drives) — there is no proven

@@ -70,6 +70,8 @@ class TestSetpointReconcile:
   def run_frames(self, CS, n=1, enabled=True):
     for _ in range(n):
       self.v_cruise_helper.update_v_cruise(CS, enabled=enabled, is_metric=False)
+      # production wires the reconcile via CardExt.update_v_cruise_post after plan_regime
+      self.v_cruise_helper.reconcile_setpoint_with_dash(CS)
       CS.buttonEvents = []
 
   def engage_at(self, dash_kph):
@@ -396,6 +398,40 @@ class TestDecelOvershoot:
     icbm = self.make_icbm()
     self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100, enabled=False)
     assert icbm.v_target == 40, icbm.v_target
+
+
+class TestOpLongGuardrails:
+  """Under openpilot longitudinal the planner brakes for curves itself: the servo keeps
+  the dash on the driver's setpoint and the overshoot lever stays off."""
+
+  def make_icbm(self, op_long):
+    return IntelligentCruiseButtonManagement(car.CarParams(pcmCruise=True, brand="mazda",
+                                                           openpilotLongitudinalControl=op_long),
+                                             custom.CarParamsSP(pcmCruiseSpeed=False))
+
+  def run_frames(self, icbm, target_mph, v_ego_mph, a_target, n=1, source='sccVision'):
+    for _ in range(n):
+      CS = car.CarState(vEgo=v_ego_mph * CV.MPH_TO_MS, vCruise=60 * CV.MPH_TO_KPH,
+                        cruiseState={"speedCluster": 60 * CV.MPH_TO_MS})
+      CC = car.CarControl(enabled=True)
+      LP_SP = custom.LongitudinalPlanSP(vTarget=target_mph * CV.MPH_TO_MS, aTarget=float(a_target))
+      LP_SP.longitudinalPlanSource = source
+      icbm.run(CS, CC, LP_SP, is_metric=False, decel_overshoot_enabled=True)
+
+  def test_dash_ignores_curve_target_under_op_long(self):
+    icbm = self.make_icbm(op_long=True)
+    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100)
+    assert icbm.v_target == 60  # the driver's setpoint, never the 40 mph curve target
+
+  def test_overshoot_lever_off_under_op_long(self):
+    icbm = self.make_icbm(op_long=True)
+    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100)
+    assert icbm.overshoot_mph == 0.0
+
+  def test_stock_cruise_still_walks_the_curve(self):
+    icbm = self.make_icbm(op_long=False)
+    self.run_frames(icbm, target_mph=40, v_ego_mph=45, a_target=-0.45, n=100)
+    assert icbm.v_target <= 40  # unchanged non-OP-long behavior: the dash follows the plan
 
 
 class TestDecelOvershootIsALever:

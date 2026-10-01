@@ -65,6 +65,10 @@ DECEL_OVERSHOOT_RELEASE = 3.  # mph/s
 OP_LONG_PLANNER_SOURCES = (LongitudinalPlanSource.sccVision, LongitudinalPlanSource.sccMap)
 DECEL_OVERSHOOT_SOURCES = (*OP_LONG_PLANNER_SOURCES, LongitudinalPlanSource.speedLimitAssist)
 
+# Curve/limit sources the planner already brakes for under openpilot longitudinal: the
+# servo leaves the dash alone for those (see update_calculations).
+OP_LONG_PLANNER_SOURCES = (LongitudinalPlanSource.sccVision, LongitudinalPlanSource.sccMap)
+
 # The sustained 10 Hz stream registers on the ECU as paced discrete presses, never as a
 # held button (all-routes census: 149/149 stream-driven dash steps were 1 mph -- the
 # wheel's own button-up frames interleave with the forged ones, so the ECU never sees an

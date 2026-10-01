@@ -62,7 +62,7 @@ def make_lac(cls, friction=0.0, **kwargs):
   return cls(make_cp(friction=friction), custom.CarParamsSP.new_message().as_reader(), make_ci(), DT, **kwargs)
 
 
-def make_mazda_ti_lac(mode, fingerprint="MAZDA_CX5", flags=MAZDA_TI_FLAGS):
+def make_mazda_ti_lac(mode, fingerprint="MAZDA_CX5_2022", flags=MAZDA_TI_FLAGS):
   CP = car.CarParams.new_message(
     steerControlType="torque",
     steerLimitTimer=0.4,
@@ -131,11 +131,16 @@ class TestMazdaTorqueV2AB:
     assert ti_lsf_scale(7.5, lac.mazda_v2_mode) == ti_lsf_scale(7.5, MazdaTorqueV2Mode.A)
     assert torque_v2_mode_of(lac) == custom.CarControlSP.TorqueV2Mode.notApplicable
 
-  def test_native_2022_is_a_but_not_applicable(self):
-    lac = make_mazda_ti_lac(MazdaTorqueV2Mode.B, fingerprint="MAZDA_CX5_2022")
+  def test_pre_2022_cx5_not_applicable(self):
+    lac = make_mazda_ti_lac(MazdaTorqueV2Mode.B, fingerprint="MAZDA_CX5")
     assert lac.mazda_v2_mode is None
     assert ti_lsf_scale(7.5, lac.mazda_v2_mode) == ti_lsf_scale(7.5, MazdaTorqueV2Mode.A)
     assert torque_v2_mode_of(lac) == custom.CarControlSP.TorqueV2Mode.notApplicable
+
+  def test_native_2022_applies_the_picked_mode(self):
+    lac = make_mazda_ti_lac(MazdaTorqueV2Mode.B, fingerprint="MAZDA_CX5_2022")
+    assert lac.mazda_v2_mode is MazdaTorqueV2Mode.B
+    assert torque_v2_mode_of(lac) == custom.CarControlSP.TorqueV2Mode.modeB
 
   @pytest.mark.parametrize(("mode", "telemetry"), [
     (MazdaTorqueV2Mode.A, custom.CarControlSP.TorqueV2Mode.modeA),
