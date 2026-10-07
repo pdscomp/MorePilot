@@ -27,6 +27,7 @@ from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_ca
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
 from openpilot.sunnypilot.selfdrive.car.card_ext import CardExt
 from openpilot.sunnypilot.selfdrive.car.alpha_long_toggle import AlphaLongToggleMonitor
+from openpilot.sunnypilot.system.params_migration import stamp_mazda_control_cache_contract
 
 REPLAY = "REPLAY" in os.environ
 
@@ -186,6 +187,13 @@ class Car:
     self.params.put("CarParamsSP", cp_sp_bytes, block=True)
     self.params.put("CarParamsSPCache", cp_sp_bytes)
     self.params.put("CarParamsSPPersistent", cp_sp_bytes)
+
+    # Stamp the Mazda cache contract last, after persistent CP/SP and the PrevRoute advance;
+    # a crash before this re-quarantines next boot. A stamp failure must not kill card.
+    try:
+      stamp_mazda_control_cache_contract(self.params, self.CP)
+    except Exception:
+      cloudlog.exception("card: failed to stamp Mazda control cache contract")
 
     self.v_cruise_helper = VCruiseHelper(self.CP, self.CP_SP)
     self.card_ext = CardExt(self.CP, self.CP_SP, self.params, self.sm, self.v_cruise_helper, self.CI)
