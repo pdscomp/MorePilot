@@ -137,7 +137,8 @@ class ControlsExt(ModelStateBase, ControlsLateralZP):
       CC_SP.params = build_param_dump(self.params)
       self._param_dump_pending = False
     CC_SP.zoompilot.lateralExtension = lateral_extension_of(getattr(self, "LaC", None))
-    CC_SP.torqueV2Mode = torque_v2_mode_of(getattr(self, "LaC", None))
+    # torqueV2Mode stays wire-only (shipped ordinal @8): nothing in opendbc consumes it,
+    # so the dataclass-aware converter drops it and it is no longer mirrored here
 
     self.get_lead_data(CC_SP.leadOne, sm['radarState'].leadOne)
     self.get_lead_data(CC_SP.leadTwo, sm['radarState'].leadTwo)
