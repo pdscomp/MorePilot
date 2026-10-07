@@ -378,22 +378,35 @@ class TestUpdateSpeedDepTorqueFallback:
   """Tests for update_speed_dep_torque fallback logic (TOML seeds vs global filtered)."""
 
   @staticmethod
-  def _make_mock_tp(speed_bp, lafs, frictions, valid, global_laf=2.0, global_fric=0.15):
+  def _make_mock_tp(use_params=True, global_laf=2.0, global_fric=0.15):
+    """Upstream's lateralTorqueParameters: useParams and the global filtered values."""
     tp = MagicMock()
-    tp.speedBinCenters = speed_bp
-    tp.speedBinLatAccelFactors = lafs
-    tp.speedBinFrictions = frictions
-    tp.speedBinValid = valid
+    tp.useParams = use_params
     tp.latAccelFactorFiltered = global_laf
     tp.frictionCoefficientFiltered = global_fric
     tp.latAccelOffsetFiltered = 0.0
     return tp
 
   @staticmethod
+  def _make_mock_tp_sp(speed_bp, lafs, frictions, valid):
+    """The fork's liveTorqueParametersSP: the per-bin values."""
+    tp_sp = MagicMock()
+    tp_sp.speedBinCenters = speed_bp
+    tp_sp.speedBinLatAccelFactors = lafs
+    tp_sp.speedBinFrictions = frictions
+    tp_sp.speedBinValid = valid
+    return tp_sp
+
+  @staticmethod
   def _make_mock_self(fingerprint='TEST_CAR'):
     mock_self = MagicMock()
     mock_self.CP.carFingerprint = fingerprint
+    # real scalars where get_speed_dep_config_for_car dereferences them
+    mock_self.CP.brand = 'test'
+    mock_self.CP.flags = 0
+    mock_self.CP.minSteerSpeed = 0.0
     mock_self._speed_dep_active = False
+    mock_self._speed_dep_car_cfg = None
     mock_self._speed_dep_speed_bp = []
     mock_self._speed_dep_lat_accel_factor_bp = []
     mock_self._speed_dep_friction_bp = []
@@ -409,10 +422,10 @@ class TestUpdateSpeedDepTorqueFallback:
     }
 
     mock_self = self._make_mock_self()
-    mock_tp = self._make_mock_tp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7,
-                                 [False] * 7, global_laf=1.0, global_fric=0.05)
+    mock_tp = self._make_mock_tp(global_laf=1.0, global_fric=0.05)
+    mock_tp_sp = self._make_mock_tp_sp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7, [False] * 7)
 
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
 
     assert mock_self._speed_dep_lat_accel_factor_bp == seed_lafs
     assert mock_self._speed_dep_friction_bp == seed_frictions
@@ -423,10 +436,10 @@ class TestUpdateSpeedDepTorqueFallback:
     mock_get_config.return_value = {}
 
     mock_self = self._make_mock_self(fingerprint='UNKNOWN_CAR')
-    mock_tp = self._make_mock_tp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7,
-                                 [False] * 7, global_laf=2.0, global_fric=0.15)
+    mock_tp = self._make_mock_tp(global_laf=2.0, global_fric=0.15)
+    mock_tp_sp = self._make_mock_tp_sp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7, [False] * 7)
 
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
 
     assert mock_self._speed_dep_lat_accel_factor_bp == [2.0] * 7
     assert mock_self._speed_dep_friction_bp == [0.15] * 7
@@ -440,10 +453,10 @@ class TestUpdateSpeedDepTorqueFallback:
     }
 
     mock_self = self._make_mock_self()
-    mock_tp = self._make_mock_tp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7,
-                                 [False] * 7, global_laf=2.0, global_fric=0.15)
+    mock_tp = self._make_mock_tp(global_laf=2.0, global_fric=0.15)
+    mock_tp_sp = self._make_mock_tp_sp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7, [False] * 7)
 
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
 
     assert mock_self._speed_dep_lat_accel_factor_bp == [2.0] * 7
     assert mock_self._speed_dep_friction_bp == [0.15] * 7
@@ -456,10 +469,10 @@ class TestUpdateSpeedDepTorqueFallback:
     }
 
     mock_self = self._make_mock_self()
-    mock_tp = self._make_mock_tp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7,
-                                 [False] * 7, global_laf=2.0, global_fric=0.15)
+    mock_tp = self._make_mock_tp(global_laf=2.0, global_fric=0.15)
+    mock_tp_sp = self._make_mock_tp_sp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7, [False] * 7)
 
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
 
     assert mock_self._speed_dep_lat_accel_factor_bp == [2.0] * 7
     assert mock_self._speed_dep_friction_bp == [0.15] * 7
@@ -478,9 +491,10 @@ class TestUpdateSpeedDepTorqueFallback:
     valid = [True, False, True, False, True, False, False]
 
     mock_self = self._make_mock_self()
-    mock_tp = self._make_mock_tp(SAMPLE_SPEED_BP, learned_lafs, learned_frictions, valid)
+    mock_tp = self._make_mock_tp()
+    mock_tp_sp = self._make_mock_tp_sp(SAMPLE_SPEED_BP, learned_lafs, learned_frictions, valid)
 
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
 
     for i in range(7):
       if valid[i]:
@@ -497,10 +511,10 @@ class TestUpdateSpeedDepTorqueFallback:
     mock_self = self._make_mock_self()
     mock_self._speed_dep_active = True
 
-    mock_tp = MagicMock()
-    mock_tp.speedBinCenters = []
+    mock_tp = self._make_mock_tp()
+    mock_tp_sp = self._make_mock_tp_sp([], [], [], [])
 
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
 
     mock_self.disable_speed_dep_torque.assert_called_once()
 
@@ -512,11 +526,22 @@ class TestUpdateSpeedDepTorqueFallback:
     mock_self = self._make_mock_self()
     mock_self._speed_dep_active = True
 
-    mock_tp = MagicMock()
-    mock_tp.useParams = False
-    mock_tp.speedBinCenters = [6.5, 10.0]
+    mock_tp = self._make_mock_tp(use_params=False)
+    mock_tp_sp = self._make_mock_tp_sp([6.5, 10.0], [2.0, 2.0], [0.1, 0.1], [True, True])
 
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp)
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
+
+    mock_self.disable_speed_dep_torque.assert_called_once()
+
+  @patch(PATCH_GET_SPEED_DEP_CONFIG)
+  def test_no_fork_message_deactivates(self, mock_get_config):
+    """tp_sp None (liveTorqueParametersSP not yet checked out) routes through the same
+    deactivation path even with useParams still on."""
+    mock_get_config.return_value = {}
+    mock_self = self._make_mock_self()
+    mock_self._speed_dep_active = True
+
+    LatControlTorqueExt.update_speed_dep_torque(mock_self, self._make_mock_tp(), None)
 
     mock_self.disable_speed_dep_torque.assert_called_once()
 
@@ -551,7 +576,8 @@ class TestSeedValidityGate:
   @staticmethod
   def _cp(fingerprint, min_steer_speed):
     from types import SimpleNamespace
-    return SimpleNamespace(carFingerprint=fingerprint, minSteerSpeed=min_steer_speed)
+    return SimpleNamespace(carFingerprint=fingerprint, minSteerSpeed=min_steer_speed,
+                           brand='test', flags=0)
 
   @patch(PATCH_GET_SPEED_DEP_CONFIG)
   def test_flagged_entry_suppressed_on_stock_eps(self, mock_get_config):
@@ -566,15 +592,18 @@ class TestSeedValidityGate:
 
   @patch(PATCH_GET_SPEED_DEP_CONFIG)
   def test_unflagged_entry_applies_regardless(self, mock_get_config):
-    cfg = {'speed_bp': [10.0]}
+    cfg = {'speed_bp': [15.0]}  # above the 12.5 floor, so the bin filter keeps it
     mock_get_config.return_value = {'PLAIN_CAR': cfg}
     assert get_speed_dep_config_for_car(self._cp('PLAIN_CAR', 12.5)) == cfg
 
   def test_real_toml_flags_are_as_intended(self):
-    """CX-9 2021 seeds were measured on an EPS-swapped car and must carry the flag;
-    the CX-5 2022 seeds were measured on the stock (steer-to-zero) EPS and must not."""
+    """The swap-chassis entries (KE chassis and friends) substitute the CX-5 2022 table
+    learned behind the donor EPS and must carry the flag; the native CX-5 2022 and CX-9 2021
+    tables stand on their own and must not (the CX-9's stock-EPS floor is handled by
+    dropping the bins below it, not by suppressing the entry)."""
     cars = get_speed_dep_config()
-    assert cars['MAZDA_CX9_2021'].get('requires_steer_to_zero') is True
+    assert cars['MAZDA_CX5_KE'].get('requires_steer_to_zero') is True
+    assert 'requires_steer_to_zero' not in cars['MAZDA_CX9_2021']
     assert 'requires_steer_to_zero' not in cars['MAZDA_CX5_2022']
 
 
