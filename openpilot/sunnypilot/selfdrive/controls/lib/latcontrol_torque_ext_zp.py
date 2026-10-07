@@ -25,6 +25,13 @@ class LatControlTorqueExtZP:
     self._speed_dep_speed_bp = []
     self._speed_dep_lat_accel_factor_bp = []
     self._speed_dep_friction_bp = []
+    # Per-count tables for platforms with a speed-dependent STEER_MAX: the schedule is
+    # (speed_bp, steer_max_v) from the car's speed-dep config, LAF divided and friction
+    # multiplied by it at each bin center. None/empty on flat cars.
+    self._speed_dep_steer_max_schedule = None
+    self._speed_dep_laf_per_count_bp = []
+    self._speed_dep_friction_per_count_bp = []
+    self._speed_dep_car_cfg = None
     self._last_vego = 0.0
 
     # The manual override is typed on the scale upstream's tunes use (TUNE_STEER_MAX), which is
@@ -87,10 +94,20 @@ class LatControlTorqueExtZP:
       changed = self._write_torque_params(torque_params, prev, self._override_lat_accel_factor * self._tune_scale,
                                           self._override_friction / self._tune_scale)
 
-    # Speed-dep latAccelFactor and friction, interpolated by speed each frame.
+    # Speed-dep latAccelFactor and friction, interpolated by speed each frame. On a platform
+    # with a speed-dependent STEER_MAX the bins are normalized units learned under one scale
+    # each, so both interp in CAN-count space and rescale at the current speed: the scale's
+    # step lands where the carcontroller applies it instead of being smeared across the bin
+    # span. Friction is inverted (counts = friction * STEER_MAX). See docs/zoompilot/lateral-tune.md.
     elif self._speed_dep_active and self._speed_dep_speed_bp:
-      new_lat_accel_factor = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_lat_accel_factor_bp))
-      new_fric = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_friction_bp))
+      if self._speed_dep_steer_max_schedule and self._speed_dep_laf_per_count_bp:
+        sm_bp, sm_v = self._speed_dep_steer_max_schedule
+        steer_max = float(np.interp(self._last_vego, sm_bp, sm_v))
+        new_lat_accel_factor = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_laf_per_count_bp)) * steer_max
+        new_fric = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_friction_per_count_bp)) / steer_max
+      else:
+        new_lat_accel_factor = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_lat_accel_factor_bp))
+        new_fric = float(np.interp(self._last_vego, self._speed_dep_speed_bp, self._speed_dep_friction_bp))
       changed = self._write_torque_params(torque_params, prev, new_lat_accel_factor, new_fric)
 
     if self.steer_rail_schedule is not None:
