@@ -36,7 +36,7 @@ def load_reset_module(monkeypatch, relative_path):
   stub_module(monkeypatch, "openpilot.system.ui.widgets", Widget=StubWidget)
   stub_module(monkeypatch, "openpilot.system.ui.widgets.button",
               Button=StubWidget, ButtonStyle=SimpleNamespace(PRIMARY=0))
-  stub_module(monkeypatch, "openpilot.system.ui.widgets.label", gui_label=lambda *a, **k: None, gui_text_box=lambda *a, **k: None)
+  stub_module(monkeypatch, "openpilot.system.ui.widgets.label", UnifiedLabel=StubWidget, gui_label=lambda *a, **k: None, gui_text_box=lambda *a, **k: None)
   stub_module(monkeypatch, "openpilot.system.ui.widgets.scroller", Scroller=StubWidget)
   stub_module(monkeypatch, "openpilot.system.ui.mici_setup",
               GreyBigButton=StubWidget, FailedPage=StubWidget)
