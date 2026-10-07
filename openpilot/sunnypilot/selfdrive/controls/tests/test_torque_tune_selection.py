@@ -237,6 +237,12 @@ class TestTorqueTuneSelection:
     v2; with Enforce Torque Control off both run v0."""
     from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import jerk_aware_has_effect
 
+    params, _ = ctx
+    params.put_bool("EnforceTorqueControl", enforce, block=True)
+    params.put("TorqueControlTune", small, block=True)
+    params.put("TorqueControlTuneBig", big, block=True)
+    assert jerk_aware_has_effect(params) is expected
+
 
 def _with_fingerprint(controls, fingerprint: str):
   CP = car.CarParams.new_message(steerControlType="torque", carFingerprint=fingerprint)
@@ -290,24 +296,6 @@ class TestTorqueTuneTiSeed:
     assert params.get("EnforceTorqueControl") is None
 
 
-class _ExtStub:
-  """LatControlTorqueExt stand-in: pass-through, never overrides output."""
-  def __init__(self, *a, **k):
-    self.overrides_output = False
-  def update_override_torque_params(self, torque_params):
-    return False
-  def update_limits(self):
-    pass
-  def update(self, CS, VM, pid, params, ff, pid_log, setpoint, measurement, *a):
-    return pid_log, 0.0
-
-    params, _ = ctx
-    params.put_bool("EnforceTorqueControl", enforce, block=True)
-    params.put("TorqueControlTune", small, block=True)
-    params.put("TorqueControlTuneBig", big, block=True)
-    assert jerk_aware_has_effect(params) is expected
-
-
   def test_cx8_gets_base_bundle_and_live_delay_left_alone(self, ctx):
     params, controls = ctx
     _with_fingerprint(controls, "MAZDA_CX8_2022")
@@ -335,3 +323,25 @@ class _ExtStub:
     assert params.get_bool("EnforceTorqueControl")
     assert params.get("LiveTorqueParamsToggle") is None
 
+  def test_swapped_cx5_ti_seeds_tune_without_bundle(self, ctx):
+    # Paul's 2020 CX-5 + donor EPS fingerprints MAZDA_CX5 (not MAZDA_CX5_2022), so it is
+    # outside TI_PLATFORMS: TI seeds enforcement and the v2 tune, but not the bundle.
+    # Its self-tune toggle arrives via the EPS-hardware seed (_seed_mazda_torque_defaults).
+    params, controls = ctx
+    _with_fingerprint(controls, "MAZDA_CX5")
+    params.put_bool("TorqueInterceptorEnabled", True, block=True)
+    assert select(controls) == V2
+    assert params.get("TorqueControlTune", return_default=True) == 2.0
+    for key in controlsd_ext.TI_TUNE_SEEDS:
+      assert params.get(key) is None, key
+
+  def test_cx8_2023_ti_seeds_tune_without_bundle(self, ctx):
+    # Upstream's CX-8 2023 is a distinct platform from the owner's CX-8 2022, not a
+    # spelling fix: it must not inherit the 2022's TI bundle by collapsing the names.
+    params, controls = ctx
+    _with_fingerprint(controls, "MAZDA_CX8_2023")
+    params.put_bool("TorqueInterceptorEnabled", True, block=True)
+    assert select(controls) == V2
+    assert params.get("TorqueControlTune", return_default=True) == 2.0
+    for key in controlsd_ext.TI_TUNE_SEEDS:
+      assert params.get(key) is None, key

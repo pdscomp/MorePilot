@@ -151,6 +151,9 @@ class TestPlatformCapability(OpenpilotTestCase):
       ("eligible", {}, True),
       ("native_cx5_2022", {"platform": "MAZDA_CX5_2022"}, False),
       ("cx8", {"platform": "MAZDA_CX8_2022"}, False),
+      # CX-8 2023 ships the steer-to-zero EPS from the factory, unlike the 2022: an A/B
+      # gate widened to "any steer-at-standstill platform" would wrongly admit only it.
+      ("cx8_2023", {"platform": "MAZDA_CX8_2023"}, False),
       ("ti_off", {"ti": False}, False),
       ("non_stz", {"steer_at_standstill": False}, False),
       ("non_torque", {"torque_tuning": False}, False),
