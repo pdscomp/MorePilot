@@ -61,7 +61,13 @@ def _initialize_intelligent_cruise_button_management(CP: structs.CarParams, CP_S
 
 
 def _initialize_torque_lateral_control(CI: CarInterfaceBase, CP: structs.CarParams, enforce_torque: bool, nnlc_enabled: bool) -> None:
-  if nnlc_enabled or enforce_torque:
+  if not (nnlc_enabled or enforce_torque):
+    return
+  if CP.brand == "mazda":
+    # TI and native Mazda tunes share the params.toml source but different scale. Rebuild via the
+    # finalized CP instead of the candidate-only path, or the second pass would overwrite TI flags.
+    CI.configure_torque_tune_for_cp(CP)  # type: ignore[attr-defined]
+  else:
     CI.configure_torque_tune(CP.carFingerprint, CP.lateralTuning)
 
 

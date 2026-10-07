@@ -11,6 +11,7 @@ Tests for the one-time steer-to-zero Mazda torque-control default seeding.
 from opendbc.car.mazda.values import MazdaFlags
 from opendbc.car.structs import car
 
+from openpilot.sunnypilot.selfdrive.car.interfaces import _initialize_torque_lateral_control
 from openpilot.sunnypilot.selfdrive.car.mazda_torque_seed import (MAZDA_STEER_TO_ZERO_TORQUE_TUNE, seed_car_defaults_offroad,
                                                                  seed_mazda_torque_defaults)
 
@@ -142,6 +143,40 @@ class TestMazdaTorqueTuneSeed:
       seed_mazda_torque_defaults(cp, params)
       assert params.get("TorqueControlTune") is None
       assert params.get("MazdaTorqueTuneSeeded") is None
+
+
+class TestTorqueRetuneSeam:
+  class FakeMazdaCI:
+    def __init__(self):
+      self.calls = []
+
+    def configure_torque_tune_for_cp(self, CP):
+      self.calls.append(("cp", CP))
+
+    def configure_torque_tune(self, candidate, tune):
+      self.calls.append(("candidate", candidate, tune))
+
+  def test_mazda_retune_uses_finalized_cp(self):
+    CP = _cx5_eps_cp()
+    CP.carFingerprint = "MAZDA_CX5_2022"
+    CI = self.FakeMazdaCI()
+
+    _initialize_torque_lateral_control(CI, CP, enforce_torque=True, nnlc_enabled=False)
+    _initialize_torque_lateral_control(CI, CP, enforce_torque=True, nnlc_enabled=False)
+
+    assert CI.calls == [("cp", CP), ("cp", CP)]
+
+  def test_non_mazda_retune_keeps_candidate_path(self):
+    CP = _non_mazda_cp()
+    CP.carFingerprint = "TOYOTA"
+    CI = self.FakeMazdaCI()
+
+    _initialize_torque_lateral_control(CI, CP, enforce_torque=True, nnlc_enabled=False)
+
+    assert len(CI.calls) == 1
+    name, candidate, tune = CI.calls[0]
+    assert (name, candidate) == ("candidate", "TOYOTA")
+    assert tune.to_dict() == CP.lateralTuning.to_dict()
 
 
 class TestOffroadSeed:
