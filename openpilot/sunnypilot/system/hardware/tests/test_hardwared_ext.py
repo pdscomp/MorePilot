@@ -4,11 +4,23 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of zoompilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+from contextlib import nullcontext
+
+import pytest
+
 from openpilot.common.params import ParamKeyFlag
-from openpilot.sunnypilot.selfdrive.car.stock_ecu_handback import HANDBACK_WAIT_T, REQUEST_KEY
+import openpilot.sunnypilot.selfdrive.car.stock_ecu_handback as handback_protocol
+from openpilot.sunnypilot.selfdrive.car.stock_ecu_handback import (HANDBACK_WAIT_T, REQUEST_KEY,
+                                                                   StockEcuHandBackServer)
 from openpilot.sunnypilot.selfdrive.car.tests.fakes import FakeClock, FakeParams, answer
 from openpilot.sunnypilot.system.hardware import hardwared_ext
 from openpilot.sunnypilot.system.hardware.hardwared_ext import ACCELERATOR_OFF_WAIT_T, HardwaredExt
+
+
+@pytest.fixture(autouse=True)
+def fake_lock(monkeypatch):
+  # these are pure-state dictionary tests; the real flock is covered in test_stock_ecu_handback
+  monkeypatch.setattr(handback_protocol, "_request_lock", lambda params: nullcontext())
 
 
 def _ext(**values):
@@ -40,7 +52,8 @@ class TestOnroadCycle:
   def test_onroad_cycle_waits_for_the_handback(self):
     ext, params, _ = _ext(OnroadCycleRequested=True)
     assert not ext.update(started=True)
-    assert params.get(REQUEST_KEY) == {"id": 1}
+    assert params.get(REQUEST_KEY)["id"] == 1
+    assert sorted(params.get(REQUEST_KEY)["waiters"].values()) == ["hardwared"]
     assert params.get_bool("OnroadCycleRequested")  # still pending, not consumed
     assert not ext.update(started=True)
     answer(params, "restored")
@@ -75,7 +88,7 @@ class TestForcedOffroad:
     ext, params, _ = _ext(OffroadModeRequested=True)
     assert not ext.update(started=True)
     assert not params.get_bool("OffroadMode")
-    assert params.get(REQUEST_KEY) == {"id": 1}
+    assert params.get(REQUEST_KEY)["id"] == 1
     answer(params, "restored")
     assert not ext.update(started=True)
     assert params.get_bool("OffroadMode")
@@ -194,3 +207,55 @@ class TestPowerOff:
       jetlink.why = why
       ext.alerts(lambda *args, **kwargs: shown.append((*args, kwargs["extra_text"])))
     assert shown == [("Offroad_AcceleratorUnavailable", False, None), ("Offroad_AcceleratorUnavailable", True, "no Jetson on USB")]
+
+class TestWithdrawalAfterAcceptance:
+  """A forced-offroad request withdrawn after card claimed the hand-back cannot cancel the
+  in-flight restoration: the record stands, hardwared drains it, then cycles onroad once."""
+
+  def _accepted_request(self):
+    ext, params, clock = _ext(OffroadModeRequested=True)
+    assert not ext.update(started=True)
+    server = StockEcuHandBackServer(params)
+    server.update_params()
+    assert params.get(REQUEST_KEY)["accepted"]
+    params.put_bool("OffroadModeRequested", False)
+    return ext, params, clock, server
+
+  def test_drain_waits_for_restore_then_cycles_once(self):
+    ext, params, clock, server = self._accepted_request()
+    for _ in range(3):
+      assert not ext.update(started=True)
+      assert not params.get_bool("OnroadCycleRequested")
+      assert not params.get_bool("OffroadMode")  # no offroad grant without intent
+    assert params.get(REQUEST_KEY) is not None  # the record stands for card
+    answer(params, "restored")
+    assert not ext.update(started=True)
+    assert params.get_bool("OnroadCycleRequested")
+    for _ in range(3):  # exactly one cycle request, then the normal gated path owns it
+      assert not ext.update(started=True)
+
+  def test_drain_failure_stays_onroad_and_late_recovery_cycles(self):
+    ext, params, clock, server = self._accepted_request()
+    ext.update(started=True)
+    answer(params, "failed")
+    clock.t = HANDBACK_WAIT_T * 2
+    for _ in range(5):
+      assert not ext.update(started=True)
+      assert not params.get_bool("OnroadCycleRequested")
+      assert not params.get_bool("OffroadMode")
+    assert ext.drain_failed
+    answer(params, "restored")
+    assert not ext.update(started=True)
+    assert params.get_bool("OnroadCycleRequested")
+
+  def test_re_requested_offroad_rejoins_the_live_generation(self):
+    ext, params, clock, server = self._accepted_request()
+    ext.update(started=True)  # withdraws into the drain
+    request_id = params.get(REQUEST_KEY)["id"]
+    params.put_bool("OffroadModeRequested", True)
+    assert not ext.update(started=True)  # joins the same hand-back instead of starting over
+    assert params.get(REQUEST_KEY)["id"] == request_id
+    assert not ext.draining
+    answer(params, "restored")
+    assert not ext.update(started=True)
+    assert params.get_bool("OffroadMode")

@@ -147,7 +147,7 @@ def manager_thread() -> None:
   started_prev = False
   ignition_prev = False
   # a stop with no cancel: proceeds on any hand-back answer, or after the bound with none
-  stop_gate = StockEcuHandBackGate(params)
+  stop_gate = StockEcuHandBackGate(params, owner="manager")
 
   while True:
     sm.update(1000)

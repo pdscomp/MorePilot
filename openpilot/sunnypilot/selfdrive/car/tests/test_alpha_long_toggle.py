@@ -1,5 +1,5 @@
 from opendbc.car import structs
-from openpilot.sunnypilot.selfdrive.car.alpha_long_toggle import AlphaLongToggleMonitor, HANDBACK_TIMEOUT_FRAMES
+from openpilot.sunnypilot.selfdrive.car.alpha_long_toggle import AlphaLongToggleMonitor
 
 
 class FakeParams:
@@ -13,9 +13,8 @@ class FakeParams:
     self.bools[key] = value
 
 
-def _monitor(toggle: bool, brand="mazda", op_long=True, alpha_avail=True, offroad_requested=False):
+def _monitor(toggle: bool, op_long=True, alpha_avail=True, offroad_requested=False):
   cp = structs.CarParams()
-  cp.brand = brand
   cp.openpilotLongitudinalControl = op_long
   cp.alphaLongitudinalAvailable = alpha_avail
   params = FakeParams(AlphaLongitudinalEnabled=toggle, OffroadModeRequested=offroad_requested)
@@ -24,9 +23,8 @@ def _monitor(toggle: bool, brand="mazda", op_long=True, alpha_avail=True, offroa
   return m, params
 
 
-def _step(monitor, acc_faulted=False, enabled=False):
+def _step(monitor, enabled=False):
   cs = structs.CarState()
-  cs.accFaulted = acc_faulted
   cc = structs.CarControl()
   cc.enabled = enabled
   cc_sp = structs.CarControlSP()
@@ -35,69 +33,48 @@ def _step(monitor, acc_faulted=False, enabled=False):
 
 
 class TestAlphaLongToggleMonitor:
+  """The monitor is intent-only: it writes OnroadCycleRequested for a genuine disengaged
+  mismatch. The hand-back itself is card's server plus hardwared's gate, never the monitor."""
+
   def test_no_mismatch_no_action(self):
     m, params = _monitor(toggle=True, op_long=True)
     cc_sp = _step(m)
     assert not cc_sp.stockEcuHandBack
     assert not params.get_bool("OnroadCycleRequested")
+    assert not m.done
 
-  def test_enable_direction_cycles_immediately(self):
+  def test_disable_direction_requests_a_cycle(self):
+    m, params = _monitor(toggle=False, op_long=True)
+    cc_sp = _step(m)
+    assert not cc_sp.stockEcuHandBack  # the server asserts, not the monitor
+    assert params.get_bool("OnroadCycleRequested")
+    assert m.done
+
+  def test_enable_direction_requests_a_cycle(self):
     m, params = _monitor(toggle=True, op_long=False)
     cc_sp = _step(m)
     assert not cc_sp.stockEcuHandBack
     assert params.get_bool("OnroadCycleRequested")
 
-  def test_disable_runs_handback_until_radar_returns(self):
+  def test_monitor_never_asserts_the_handback(self):
+    # accFaulted is the carstate guard, not the monitor's signal; restoration has one owner
     m, params = _monitor(toggle=False, op_long=True)
-    # radar still silent: hand-back asserted, no cycle yet
-    for _ in range(50):
-      cc_sp = _step(m, acc_faulted=False)
-      assert cc_sp.stockEcuHandBack
-      assert not params.get_bool("OnroadCycleRequested")
-    # stock radar heard again: cycle requested
-    cc_sp = _step(m, acc_faulted=True)
-    assert cc_sp.stockEcuHandBack
-    assert params.get_bool("OnroadCycleRequested")
-
-  def test_disable_times_out_to_cycle(self):
-    m, params = _monitor(toggle=False, op_long=True)
-    for _ in range(HANDBACK_TIMEOUT_FRAMES):
-      _step(m, acc_faulted=False)
+    cs = structs.CarState()
+    cs.accFaulted = True
+    cc = structs.CarControl()
+    cc_sp = structs.CarControlSP()
+    m.update(cs, cc, cc_sp)
+    assert not cc_sp.stockEcuHandBack
     assert params.get_bool("OnroadCycleRequested")
 
   def test_waits_for_disengagement(self):
     m, params = _monitor(toggle=False, op_long=True)
-    cc_sp = _step(m, enabled=True)
-    assert not cc_sp.stockEcuHandBack
-    # once started, engagement no longer pauses the sequence
-    _step(m, enabled=False)
-    cc_sp = _step(m, enabled=True)
-    assert cc_sp.stockEcuHandBack
-
-  def test_handback_stays_asserted_after_done(self):
-    # CC_SP is rebuilt each frame; dropping the assert once done latched made the session
-    # manager read a withdrawal and re-silence the radar it had just handed back, right
-    # before shutdown
-    m, params = _monitor(toggle=False, op_long=True)
-    _step(m)
-    _step(m, acc_faulted=True)
-    assert params.get_bool("OnroadCycleRequested")
     for _ in range(10):
-      cc_sp = _step(m, acc_faulted=True)
-      assert cc_sp.stockEcuHandBack
-
-  def test_no_assert_after_done_when_nothing_was_handed_back(self):
-    # the enable direction never starts a hand-back, so there is nothing to keep asserting
-    m, params = _monitor(toggle=True, op_long=False)
-    _step(m)
-    assert params.get_bool("OnroadCycleRequested")
-    cc_sp = _step(m)
-    assert not cc_sp.stockEcuHandBack
-
-  def test_non_mazda_disable_cycles_immediately(self):
-    m, params = _monitor(toggle=False, brand="toyota", op_long=True)
-    cc_sp = _step(m)
-    assert not cc_sp.stockEcuHandBack
+      cc_sp = _step(m, enabled=True)
+      assert not cc_sp.stockEcuHandBack
+      assert not params.get_bool("OnroadCycleRequested")
+      assert not m.done
+    _step(m, enabled=False)
     assert params.get_bool("OnroadCycleRequested")
 
   def test_unavailable_never_acts(self):
@@ -112,24 +89,45 @@ class TestAlphaLongToggleMonitor:
     params.put_bool("OnroadCycleRequested", False)  # hardwared consumed it
     _step(m)
     assert not params.get_bool("OnroadCycleRequested")
+    assert m.done  # the issued cycle is irrevocable, so done latches
+
+  def test_done_does_not_block_a_new_monitor(self):
+    # the cycle restarts card; the next process fingerprints with the new toggle value
+    m, params = _monitor(toggle=True, op_long=False)
+    _step(m)
+    fresh, _ = _monitor(toggle=True, op_long=True)  # fingerprint now matches the toggle
+    _step(fresh)
+    assert not fresh.done
 
 
 class TestOffroadRequest:
   """Force-offroad is hardwared's alone (HardwaredExt + StockEcuHandBackGate own the grant and
-  its hand-back): the monitor stands down so a second writer can't race the single owner."""
+  its hand-back). A pending request merely defers the toggle; withdrawing it re-arms the
+  mismatch, so a cancelled forced offroad can no longer strand the toggle."""
 
-  def test_monitor_grants_nothing(self):
-    m, params = _monitor(toggle=True, op_long=False, offroad_requested=True)  # mismatch, so it would act
-    for _ in range(HANDBACK_TIMEOUT_FRAMES + 10):
+  def test_pending_offroad_defers_without_latching(self):
+    m, params = _monitor(toggle=False, op_long=True, offroad_requested=True)
+    for _ in range(100):
       cc_sp = _step(m)
       assert not cc_sp.stockEcuHandBack
+      assert not params.get_bool("OnroadCycleRequested")
+    assert not m.done  # deferred, not consumed
     assert not params.get_bool("OffroadMode")
     assert params.get_bool("OffroadModeRequested")  # left open for hardwared
-    assert m.done
 
-  def test_offroad_wins_over_pending_toggle_cycle(self):
-    # toggle-off and force-offroad both pending: hardwared ends the session, no cycle
+  def test_withdrawn_offroad_does_not_abandon_pending_toggle(self):
     m, params = _monitor(toggle=False, op_long=True, offroad_requested=True)
-    _step(m, acc_faulted=True)
-    assert not params.get_bool("OffroadMode")
+    _step(m)
     assert not params.get_bool("OnroadCycleRequested")
+    params.put_bool("OffroadModeRequested", False)  # the exit button
+    m.update_params()
+    _step(m)
+    assert params.get_bool("OnroadCycleRequested")
+    assert m.done
+    assert not params.get_bool("OffroadMode")
+
+  def test_enable_direction_also_defers_to_offroad(self):
+    m, params = _monitor(toggle=True, op_long=False, offroad_requested=True)
+    _step(m)
+    assert not params.get_bool("OnroadCycleRequested")
+    assert not m.done
