@@ -2,7 +2,7 @@
 """Boot contract for manager_init(): the real migration -> offroad seed -> default
 materialization -> finalize_ti_enable -> enforce_backend_state -> registration sequence,
 with only the external boundaries (build metadata, hardware identity, registration,
-sentry/logging, shm path) mocked. Assertions execute inside the registration call site,
+logging, shm path) mocked. Assertions execute inside the registration call site,
 so no later repair in manager_init can fake the state they pin. manager.main() and
 managed processes never run; no network or device calls happen."""
 import json
@@ -55,7 +55,6 @@ def boot(monkeypatch, tmp_path):
     monkeypatch.setattr(manager, "HARDWARE", SimpleNamespace(
       get_serial=lambda: "test-serial", get_device_type=lambda: "pc"))
     monkeypatch.setattr(manager, "Paths", SimpleNamespace(shm_path=lambda: str(tmp_path)))
-    monkeypatch.setattr(manager.sentry, "init", lambda project: None)
     monkeypatch.setattr(manager.cloudlog, "bind_global", lambda **kwargs: None)
     monkeypatch.setattr(manager, "register", lambda **kwargs: pytest.fail("unexpected registration"))
     # an old-branch garage: quick boot off, konik not yet locked, TI enable staged,

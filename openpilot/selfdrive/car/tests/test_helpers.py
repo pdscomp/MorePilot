@@ -15,14 +15,13 @@ from openpilot.selfdrive.car.helpers import convert_carControlSP
 class TestConvertCarControlSP:
   def test_real_message_keeps_consumed_fields_and_drops_wire_telemetry(self):
     """A real CarControlSP reader: the fields card consumes survive into the opendbc
-    dataclass; the fork/target wire telemetry (mads.lateralHeld, turnAssist, torqueV2Mode,
+    dataclass; the fork/target wire telemetry (turnAssist, torqueV2Mode,
     zoompilot) does not, and the wire bytes still carry it."""
     msg = custom.CarControlSP.new_message()
     msg.mads.enabled = True
-    msg.mads.lateralHeld = True
     msg.leadOne.dRel = 12.5
     msg.leadTwo.dRel = 30.0
-    msg.intelligentCruiseButtonManagement.sendButton = 'increaseHold'
+    msg.intelligentCruiseButtonManagement.sendButton = 'increase'
     msg.intelligentCruiseButtonManagement.vTarget = 18.0
     msg.turnAssist.holdCurvature = 0.01
     msg.torqueV2Mode = 'modeB'
@@ -36,21 +35,20 @@ class TestConvertCarControlSP:
     assert out.mads.enabled is True
     assert out.leadOne.dRel == pytest.approx(12.5)
     assert out.leadTwo.dRel == pytest.approx(30.0)
-    assert out.intelligentCruiseButtonManagement.sendButton == 'increaseHold'
+    assert out.intelligentCruiseButtonManagement.sendButton == 'increase'
     assert out.intelligentCruiseButtonManagement.vTarget == pytest.approx(18.0)
     assert out.params[0]['key'] == 'unit-test'
     assert out.params[0]['value'] == b'test-value'
-    # wire telemetry, not opendbc actuator inputs
+    # wire telemetry, not opendbc actuator inputs; the zoompilot nest IS carried for icbmHold,
+    # which opendbc's ICBM interface reads (lateralExtension inside it is wire-only)
     assert not hasattr(out, 'torqueV2Mode')
     assert not hasattr(out, 'turnAssist')
-    assert not hasattr(out, 'zoompilot')
-    assert not hasattr(out.mads, 'lateralHeld')
+    assert out.zoompilot.icbmHold is False
 
     with custom.CarControlSP.from_bytes(msg.to_bytes()) as decoded:
       assert decoded.torqueV2Mode == custom.CarControlSP.TorqueV2Mode.modeB
       assert decoded.turnAssist.holdCurvature == pytest.approx(0.01)
       assert decoded.zoompilot.lateralExtension == 'jerkAware'
-      assert decoded.mads.lateralHeld
 
   def test_capnp_only_fields_do_not_crash(self):
     """capnp CarControlSP can carry substructs and fields that have no field on the opendbc

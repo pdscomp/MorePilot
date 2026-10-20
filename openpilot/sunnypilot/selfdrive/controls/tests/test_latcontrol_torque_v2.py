@@ -13,6 +13,8 @@ See the LICENSE.md file in the root directory for more details.
 
 import math
 from collections import deque
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,7 +23,6 @@ from opendbc.car.structs import car
 from openpilot.cereal import custom
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
-from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import torque_v2_mode_of
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import LatControlTorque as LatControlTorqueV0
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v2 import (
@@ -129,22 +130,16 @@ class TestMazdaTorqueV2AB:
     lac = make_mazda_ti_lac(MazdaTorqueV2Mode.B, flags=flags)
     assert lac.mazda_v2_mode is None
     assert ti_lsf_scale(7.5, lac.mazda_v2_mode) == ti_lsf_scale(7.5, MazdaTorqueV2Mode.A)
-    assert torque_v2_mode_of(lac) == custom.CarControlSP.TorqueV2Mode.notApplicable
 
   def test_native_2022_is_a_but_not_applicable(self):
     lac = make_mazda_ti_lac(MazdaTorqueV2Mode.B, fingerprint="MAZDA_CX5_2022")
     assert lac.mazda_v2_mode is None
     assert ti_lsf_scale(7.5, lac.mazda_v2_mode) == ti_lsf_scale(7.5, MazdaTorqueV2Mode.A)
-    assert torque_v2_mode_of(lac) == custom.CarControlSP.TorqueV2Mode.notApplicable
 
-  @pytest.mark.parametrize(("mode", "telemetry"), [
-    (MazdaTorqueV2Mode.A, custom.CarControlSP.TorqueV2Mode.modeA),
-    (MazdaTorqueV2Mode.B, custom.CarControlSP.TorqueV2Mode.modeB),
-  ])
-  def test_recorded_cohort_reports_effective_mode(self, mode, telemetry):
+  @pytest.mark.parametrize("mode", [MazdaTorqueV2Mode.A, MazdaTorqueV2Mode.B])
+  def test_recorded_cohort_reports_effective_mode(self, mode):
     lac = make_mazda_ti_lac(mode)
     assert lac.mazda_v2_mode == mode
-    assert torque_v2_mode_of(lac) == telemetry
 
 
 class TestLatControlTorqueV2:

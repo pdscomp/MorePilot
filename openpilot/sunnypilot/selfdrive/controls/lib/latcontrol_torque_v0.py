@@ -44,13 +44,15 @@ VERSION = 0
 
 
 class LatControlTorque(LatControl):
+  KD_SCHEDULE = KD  # v2 subclasses override with the low-speed damping schedule
+
   def __init__(self, CP, CP_SP, CI, dt):
     super().__init__(CP, CP_SP, CI, dt)
     self.torque_params = CP.lateralTuning.torque.as_builder()
     self.torque_from_lateral_accel = CI.torque_from_lateral_accel()
     self.lateral_accel_from_torque = CI.lateral_accel_from_torque()
     kp_table = [min(k, TI_LOW_SPEED_KP_CAP) for k in KP_INTERP] if CP.steerAtStandstill and CP.brand == 'mazda' else KP_INTERP
-    self.pid = PIDController([INTERP_SPEEDS, kp_table], KI, KD, rate=1/self.dt)
+    self.pid = PIDController([INTERP_SPEEDS, kp_table], KI, self.KD_SCHEDULE, rate=1/self.dt)
     self.update_limits()
     self.steering_angle_deadzone_deg = self.torque_params.steeringAngleDeadzoneDeg
     self.lat_accel_request_buffer_len = int(LAT_ACCEL_REQUEST_BUFFER_SECONDS / self.dt)

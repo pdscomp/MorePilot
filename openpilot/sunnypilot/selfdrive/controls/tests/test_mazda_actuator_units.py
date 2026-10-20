@@ -29,7 +29,7 @@ from opendbc.sunnypilot.car import interfaces as sp_interfaces
 from openpilot.cereal import messaging
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
-from openpilot.sunnypilot.selfdrive.car.interfaces import seed_car_defaults_offroad
+from openpilot.sunnypilot.selfdrive.car.mazda_torque_seed import seed_car_defaults_offroad
 from openpilot.sunnypilot.system import params_migration
 from openpilot.sunnypilot.selfdrive.controls.tests import mazda_actuator_trace as driver
 
@@ -121,11 +121,12 @@ class TestTiKeepsOldUnits:
     assert OLD_TRACES['swapped_cx5_ti']['speed_dep'] == {}
     assert traces['cx5_2022_ti']['speed_dep']['seed_version'] == 1
     assert 'seed_version' not in traces['cx8_2022_ti']['speed_dep']  # OLD: omitted == 0
-    # the native substitute exists (loader-expanded) and is taken only without TI
-    assert traces['native_swapped_cx5']['speed_dep'].get('seed_version') == 2
+    # the native substitute exists (loader-expanded) and is taken only without TI;
+    # the 3.5 m/s crawl bin moved the native seed to version 3
+    assert traces['native_swapped_cx5']['speed_dep'].get('seed_version') == 3
     native_cfg = sp_interfaces.get_speed_dep_config()
     assert 'ti_legacy' not in native_cfg
-    assert native_cfg['MAZDA_CX5'].get('seed_version') == 2  # the CX-5 2022 table, substituted in
+    assert native_cfg['MAZDA_CX5'].get('seed_version') == 3  # the CX-5 2022 table, substituted in
     assert native_cfg['MAZDA_CX5'].get('requires_steer_to_zero') is True
 
   def test_ti_learned_bins_keep_old_counts(self, traces):
@@ -188,11 +189,11 @@ class TestNativeUsesTargetUnits:
 
     # target native seed tables: v2 8-bin table replaces OLD's stepped-scale v1; the swapped
     # body natively follows the donor substitute (OLD gave it nothing); a legacy-floor car
-    # gets nothing on either branch.
-    assert traces['native_cx5_2022']['speed_dep']['seed_version'] == 2
-    assert len(traces['native_cx5_2022']['speed_dep']['speed_bp']) == 8
+    # gets nothing on either branch. The 3.5 m/s crawl bin moved the native seed to version 3.
+    assert traces['native_cx5_2022']['speed_dep']['seed_version'] == 3
+    assert len(traces['native_cx5_2022']['speed_dep']['speed_bp']) == 9  # + the 3.5 m/s crawl bin
     assert OLD_TRACES['native_cx5_2022']['speed_dep']['seed_version'] == 1
-    assert traces['native_swapped_cx5']['speed_dep']['seed_version'] == 2
+    assert traces['native_swapped_cx5']['speed_dep']['seed_version'] == 3
     assert OLD_TRACES['native_swapped_cx5']['speed_dep'] == {}
     assert traces['native_legacy_cx5']['speed_dep'] == OLD_TRACES['native_legacy_cx5']['speed_dep'] == {}
 

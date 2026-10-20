@@ -4,7 +4,7 @@ Tests the full data flow from torqued output through controlsd to the
 torque_params used in the steering controller: per-frame latAccelFactor and friction
 interpolation, sanity bounds, toggle-off behavior, and manual override.
 
-Tests LatControlTorqueExtOverride directly (the class that owns the
+Tests LatControlTorqueExtZP directly (the class that owns the
 per-frame interpolation logic) rather than LatControlTorqueExt, which
 inherits from NNLC and requires model files to init.
 """
@@ -15,13 +15,22 @@ from unittest.mock import MagicMock, patch  # noqa: TID251
 from opendbc.sunnypilot.car.interfaces import get_speed_dep_config, get_speed_dep_config_for_car
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext import LatControlTorqueExt
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_override import LatControlTorqueExtOverride
+from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_zp import LatControlTorqueExtZP
+
+
+class _TestExt(LatControlTorqueExtZP, LatControlTorqueExtOverride):
+  """The production LatControlTorqueExt init chain: Override sets self.params, ext_zp owns the
+  per-frame interpolation under test."""
+  def __init__(self, CP):
+    LatControlTorqueExtOverride.__init__(self, CP)
+    LatControlTorqueExtZP.__init__(self, CP)
 
 SPEED_DEP_CARS = get_speed_dep_config()
 
 PATCH_PARAMS_OVERRIDE = 'openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_override.Params'
 PATCH_PARAMS_TORQUED_EXT = 'openpilot.sunnypilot.selfdrive.locationd.torqued_ext.Params'
 PATCH_PARAMS_TORQUED = 'openpilot.selfdrive.locationd.torqued.Params'
-PATCH_GET_SPEED_DEP_CONFIG = 'opendbc.sunnypilot.car.interfaces.get_speed_dep_config'
+PATCH_GET_SPEED_DEP_CONFIG = 'opendbc.sunnypilot.car.lateral_tune.get_speed_dep_config'  # the helper's home since the lateral_tune split
 
 # Sample tables
 SAMPLE_SPEED_BP = [6.5, 10.0, 15.0, 21.0, 26.5, 32.0, 37.5]
@@ -52,7 +61,7 @@ def make_override(mock_params_cls, enforce=False, manual_override=False,
   }.get(k)
 
   CP = MagicMock()
-  ovr = LatControlTorqueExtOverride(CP)
+  ovr = _TestExt(CP)
   return ovr
 
 
@@ -412,97 +421,25 @@ class TestUpdateSpeedDepTorqueFallback:
     mock_self._speed_dep_friction_bp = []
     return mock_self
 
-  @patch(PATCH_GET_SPEED_DEP_CONFIG)
-  def test_toml_seeds_used_for_invalid_bins(self, mock_get_config):
-    """Invalid bins should fall back to TOML seed values, not global filtered."""
-    seed_lafs = [2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7]
-    seed_frictions = [0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17]
-    mock_get_config.return_value = {
-      'TEST_CAR': {'speed_bp': SAMPLE_SPEED_BP, 'laf_bp': seed_lafs, 'friction_bp': seed_frictions}
-    }
+  # RETIRED test_toml_seeds_used_for_invalid_bins: controller-side TOML-seed substitution for
+  # invalid bins, superseded by the learner-owned seed-fill contract — see the retirement map
+  # below (test_a_calculable_bin_keeps_its_seed_until_valid + test_bins_taken_as_published +
+  # test_mazda_actuator_units.py).
 
-    mock_self = self._make_mock_self()
-    mock_tp = self._make_mock_tp(global_laf=1.0, global_fric=0.05)
-    mock_tp_sp = self._make_mock_tp_sp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7, [False] * 7)
-
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
-
-    assert mock_self._speed_dep_lat_accel_factor_bp == seed_lafs
-    assert mock_self._speed_dep_friction_bp == seed_frictions
-
-  @patch(PATCH_GET_SPEED_DEP_CONFIG)
-  def test_global_filtered_fallback_when_no_config(self, mock_get_config):
-    """Unconfigured car: invalid bins should use global filtered values."""
-    mock_get_config.return_value = {}
-
-    mock_self = self._make_mock_self(fingerprint='UNKNOWN_CAR')
-    mock_tp = self._make_mock_tp(global_laf=2.0, global_fric=0.15)
-    mock_tp_sp = self._make_mock_tp_sp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7, [False] * 7)
-
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
-
-    assert mock_self._speed_dep_lat_accel_factor_bp == [2.0] * 7
-    assert mock_self._speed_dep_friction_bp == [0.15] * 7
-
-  @patch(PATCH_GET_SPEED_DEP_CONFIG)
-  def test_friction_bp_missing_uses_global_fallback(self, mock_get_config):
-    """Config with laf_bp but no friction_bp should use global fallback (not crash)."""
-    mock_get_config.return_value = {
-      'TEST_CAR': {'speed_bp': SAMPLE_SPEED_BP, 'laf_bp': [2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7]}
-      # 'friction_bp' intentionally missing
-    }
-
-    mock_self = self._make_mock_self()
-    mock_tp = self._make_mock_tp(global_laf=2.0, global_fric=0.15)
-    mock_tp_sp = self._make_mock_tp_sp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7, [False] * 7)
-
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
-
-    assert mock_self._speed_dep_lat_accel_factor_bp == [2.0] * 7
-    assert mock_self._speed_dep_friction_bp == [0.15] * 7
-
-  @patch(PATCH_GET_SPEED_DEP_CONFIG)
-  def test_laf_bp_length_mismatch_uses_global_fallback(self, mock_get_config):
-    """Config with wrong-length laf_bp should use global fallback."""
-    mock_get_config.return_value = {
-      'TEST_CAR': {'speed_bp': SAMPLE_SPEED_BP, 'laf_bp': [2.1, 2.2], 'friction_bp': [0.1, 0.2]}
-    }
-
-    mock_self = self._make_mock_self()
-    mock_tp = self._make_mock_tp(global_laf=2.0, global_fric=0.15)
-    mock_tp_sp = self._make_mock_tp_sp(SAMPLE_SPEED_BP, [999.0] * 7, [999.0] * 7, [False] * 7)
-
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
-
-    assert mock_self._speed_dep_lat_accel_factor_bp == [2.0] * 7
-    assert mock_self._speed_dep_friction_bp == [0.15] * 7
-
-  @patch(PATCH_GET_SPEED_DEP_CONFIG)
-  def test_mixed_valid_invalid_bins(self, mock_get_config):
-    """Valid bins use learned values, invalid bins use TOML seeds."""
-    seed_lafs = [2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7]
-    seed_frictions = [0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17]
-    mock_get_config.return_value = {
-      'TEST_CAR': {'speed_bp': SAMPLE_SPEED_BP, 'laf_bp': seed_lafs, 'friction_bp': seed_frictions}
-    }
-
-    learned_lafs = [3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6]
-    learned_frictions = [0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27]
-    valid = [True, False, True, False, True, False, False]
-
-    mock_self = self._make_mock_self()
-    mock_tp = self._make_mock_tp()
-    mock_tp_sp = self._make_mock_tp_sp(SAMPLE_SPEED_BP, learned_lafs, learned_frictions, valid)
-
-    LatControlTorqueExt.update_speed_dep_torque(mock_self, mock_tp, mock_tp_sp)
-
-    for i in range(7):
-      if valid[i]:
-        assert mock_self._speed_dep_lat_accel_factor_bp[i] == learned_lafs[i]
-        assert mock_self._speed_dep_friction_bp[i] == learned_frictions[i]
-      else:
-        assert mock_self._speed_dep_lat_accel_factor_bp[i] == seed_lafs[i]
-        assert mock_self._speed_dep_friction_bp[i] == seed_frictions[i]
+  # RETIRED with the learner-owned seed-fill contract (speed_bin_learner pre-fills every
+  # published invalid bin with the car's TOML seeds, so the controller takes bins as
+  # published — controller-side substitution never runs). Removed nodes and their retained
+  # equivalents:
+  # - test_global_filtered_fallback_when_no_config / test_friction_bp_missing_uses_global_fallback
+  #   / test_laf_bp_length_mismatch_uses_global_fallback (controller substituted global filtered
+  #   values for invalid bins) -> locationd/tests/test_torqued_speed_dep.py
+  #   ::test_default_bins_seeded_with_offline_values covers the published seed state;
+  #   test_speed_dep_ext_update.py::test_bins_taken_as_published covers the controller contract.
+  # - test_mixed_valid_invalid_bins (controller substituted TOML seeds for invalid bins) ->
+  #   test_torqued_speed_dep.py::test_a_calculable_bin_keeps_its_seed_until_valid (seed until
+  #   valid), ::test_invalid_bin_is_not_fit (no refit), and
+  #   test_mazda_actuator_units.py::test_ti_learned_bins_keep_old_counts (exact wire counts with
+  #   seed-carrying invalid bins on the TI cohort).
 
   @patch(PATCH_GET_SPEED_DEP_CONFIG)
   def test_empty_bins_deactivate(self, mock_get_config):

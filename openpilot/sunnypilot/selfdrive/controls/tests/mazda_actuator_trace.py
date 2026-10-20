@@ -34,7 +34,7 @@ from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.car import interfaces as sp_car_interfaces
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import LatControlTorque as LatControlTorqueV0
-from openpilot.sunnypilot.selfdrive.locationd.torqued_ext import LIVE_TORQUE_PARAMETERS_SP_SERVICE
+from openpilot.sunnypilot.selfdrive.locationd.speed_bin_learner import LIVE_TORQUE_PARAMETERS_SP_SERVICE
 
 # Contract-B sweep: the TI standstill-zero boundary (0.99/1.0), seed bin centers (6.5, 9.5,
 # 21, 35), the stepped companion-scale step (14.2/14.5), and standstill itself (0).
@@ -139,6 +139,7 @@ def _controller_state(v, driver_torque=0.0):
   out.cruiseState.enabled = False
   return SimpleNamespace(
     out=out,
+    update_mads_feedback=lambda CC, CC_SP: None,  # MadsCarController wiring in the target's update
     ti_lkas_allowed=True,  # healthy TI feedback: RUN state, fresh
     lkas_rejected=0,
     steer_undelivered=False,
@@ -152,6 +153,8 @@ def _controller_state(v, driver_torque=0.0):
     mrcc_button=0,
     distance_button=0,
     mrcc_armed_raw=False,
+    cruise_available=False,
+    cruise_enabled=False,
     radar_handback_active=False,
     radar_was_silenced=False,
     lkas_allowed_speed=True,
@@ -231,16 +234,21 @@ def _driven_point(CI, lac, v, frames=DRIVEN_FRAMES):
   return lac, demand
 
 
-def _learned_msg(valid):
+def _learned_msg(valid, cfg):
+  """The learner's published message: invalid bins already carry the car's TOML seeds (or the
+  global filtered values where the car has no table), which is exactly the state the old
+  controller's invalid-bin substitution reproduced on the wire."""
   tp = messaging.new_message('lateralTorqueParameters').lateralTorqueParameters
   tp.useParams = True
   tp.latAccelFactorFiltered = LEARNED_GLOBAL_LAF
   tp.frictionCoefficientFiltered = LEARNED_GLOBAL_FRIC
   tp.latAccelOffsetFiltered = 0.0
+  seed_lafs = cfg.get('laf_bp', [LEARNED_GLOBAL_LAF] * len(LEARNED_CENTERS))
+  seed_frics = cfg.get('friction_bp', [LEARNED_GLOBAL_FRIC] * len(LEARNED_CENTERS))
   tp_sp = getattr(messaging.new_message(LIVE_TORQUE_PARAMETERS_SP_SERVICE), LIVE_TORQUE_PARAMETERS_SP_SERVICE)
   tp_sp.speedBinCenters = list(LEARNED_CENTERS)
-  tp_sp.speedBinLatAccelFactors = list(LEARNED_LAF)
-  tp_sp.speedBinFrictions = list(LEARNED_FRIC)
+  tp_sp.speedBinLatAccelFactors = [LEARNED_LAF[i] if valid[i] else seed_lafs[i] for i in range(len(LEARNED_CENTERS))]
+  tp_sp.speedBinFrictions = [LEARNED_FRIC[i] if valid[i] else seed_frics[i] for i in range(len(LEARNED_CENTERS))]
   tp_sp.speedBinValid = list(valid)
   return tp, tp_sp
 
@@ -333,7 +341,7 @@ def run_scenario(name):
         per_speed = {}
         for v in VEGO_SWEEP:
           lac = _make_lac(CI, nnlc_live=False)
-          lac.extension.update_speed_dep_torque(*_learned_msg(valid))
+          lac.extension.update_speed_dep_torque(*_learned_msg(valid, sp_interfaces.get_speed_dep_config_for_car(CI.CP)))
           lac, demand = _driven_point(CI, lac, v)
           per_speed[v] = {
             'laf': float(lac.torque_params.latAccelFactor),

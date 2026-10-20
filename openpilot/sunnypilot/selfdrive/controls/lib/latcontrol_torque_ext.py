@@ -5,6 +5,8 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
+import numpy as np
+
 from openpilot.sunnypilot.selfdrive.controls.lib.nnlc.nnlc import NeuralNetworkLateralControl
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_override import LatControlTorqueExtOverride
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_ext_zp import LatControlTorqueExtZP
@@ -67,28 +69,19 @@ class LatControlTorqueExt(LatControlTorqueExtZP, NeuralNetworkLateralControl, La
 
     factors = list(tp_sp.speedBinLatAccelFactors)
     frictions = list(tp_sp.speedBinFrictions)
-    valid_bp = list(tp_sp.speedBinValid)
 
     if self._speed_dep_car_cfg is None:
       from opendbc.sunnypilot.car.interfaces import get_speed_dep_config_for_car
       self._speed_dep_car_cfg = get_speed_dep_config_for_car(self.CP)
     cfg = self._speed_dep_car_cfg
-    seed_lafs = cfg.get('laf_bp')
-    seed_frictions = cfg.get('friction_bp')
-    if (seed_lafs and seed_frictions and
-        len(seed_lafs) == len(speed_bp) and len(seed_frictions) == len(speed_bp)):
-      fallback_factors = seed_lafs
-      fallback_frictions = seed_frictions
-    else:
-      global_factor = tp.latAccelFactorFiltered
-      global_fric = tp.frictionCoefficientFiltered
-      fallback_factors = [global_factor] * len(speed_bp)
-      fallback_frictions = [global_fric] * len(speed_bp)
 
     self._speed_dep_active = True
     self._speed_dep_speed_bp = speed_bp
-    self._speed_dep_lat_accel_factor_bp = [factors[i] if valid_bp[i] else fallback_factors[i] for i in range(len(speed_bp))]
-    self._speed_dep_friction_bp = [frictions[i] if valid_bp[i] else fallback_frictions[i] for i in range(len(speed_bp))]
+    # the learner pre-fills every published bin with the TOML seed and only refits a bin once
+    # it is valid, so the tables are taken exactly as published — no TOML re-read and no
+    # global substitution here (test_bins_taken_as_published)
+    self._speed_dep_lat_accel_factor_bp = factors
+    self._speed_dep_friction_bp = frictions
 
     # Per-count tables for platforms with a speed-dependent STEER_MAX (see the per-frame
     # interp in the override). Learned and seed values alike were measured under this car's

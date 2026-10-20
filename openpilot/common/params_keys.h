@@ -315,6 +315,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ExperimentalModeLeadGap", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"ExperimentalModeSetSpeed", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"LaneChangeSmoothing", {PERSISTENT | BACKUP, INT, "0"}},
+    {"OneLaneChange", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"LeadForecast", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"LiveTorqueParametersSP", {PERSISTENT | DONT_LOG, BYTES}},
     {"MazdaTjaButton", {PERSISTENT | BACKUP, BOOL, "0"}},

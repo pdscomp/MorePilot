@@ -22,12 +22,11 @@ from openpilot.sunnypilot.system.hardware.hardwared_ext import HardwaredExt
 def test_target_schema_and_fork_telemetry_convert_together():
   msg = custom.CarControlSP.new_message()
   msg.mads.enabled = True
-  msg.mads.lateralHeld = True
   msg.leadOne.dRel = 12.5
   msg.turnAssist.holdCurvature = 0.01
   msg.torqueV2Mode = 'modeB'
   msg.zoompilot.lateralExtension = 'jerkAware'
-  msg.intelligentCruiseButtonManagement.sendButton = 'increaseHold'
+  msg.intelligentCruiseButtonManagement.sendButton = 'increase'
   msg.intelligentCruiseButtonManagement.vTarget = 18.0
   msg.leadTwo.dRel = 30.0
   msg.init('params', 1)
@@ -37,7 +36,7 @@ def test_target_schema_and_fork_telemetry_convert_together():
   out = convert_carControlSP(msg.as_reader())
   assert out.mads.enabled
   assert out.leadOne.dRel == pytest.approx(12.5)
-  assert out.intelligentCruiseButtonManagement.sendButton == 'increaseHold'
+  assert out.intelligentCruiseButtonManagement.sendButton == 'increase'
   assert out.intelligentCruiseButtonManagement.vTarget == pytest.approx(18.0)
   assert out.leadTwo.dRel == pytest.approx(30.0)
   assert out.params[0]['key'] == 'unit-test'
@@ -46,12 +45,10 @@ def test_target_schema_and_fork_telemetry_convert_together():
   # Selected boundary: these are wire telemetry, not opendbc actuator inputs.
   assert not hasattr(out, 'torqueV2Mode')
   assert not hasattr(out, 'turnAssist')
-  assert not hasattr(out.mads, 'lateralHeld')
   with custom.CarControlSP.from_bytes(msg.to_bytes()) as decoded:
     assert decoded.torqueV2Mode == custom.CarControlSP.TorqueV2Mode.modeB
     assert decoded.turnAssist.holdCurvature == pytest.approx(0.01)
     assert decoded.zoompilot.lateralExtension == 'jerkAware'
-    assert decoded.mads.lateralHeld
 
 
 def test_withdrawn_offroad_does_not_abandon_pending_alpha_toggle():

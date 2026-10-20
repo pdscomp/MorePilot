@@ -69,7 +69,9 @@ class SteeringLayoutMici(NavScroller):
     # steers through slow signaled turns; blinker pause suppresses lateral in exactly that
     # regime, so the pause wins and this reads off while it is enabled (param kept)
     self._turn_assist_toggle = BigParamControlSP(tr("low speed") + "\n" + tr("turn assist"), "LowSpeedTurnAssist",
-                                                 depends_on=lambda: not self._blinker_pause_on)
+                                                 depends_on=lambda: not self._blinker_pause_on,
+                                                 description=tr("Steers through slow signaled turns for you.\n" +
+                                                                "Reads off while blinker pause is on, since the pause suppresses steering there."))
 
     for btn in [self._mads_settings_btn, self._lane_change_btn, self._blinker_settings_btn, self._torque_settings_btn]:
       btn.set_subtitle_font_size(24)
@@ -117,7 +119,8 @@ class SteeringLayoutMici(NavScroller):
                                            description=tr("Nudge: signal, then nudge the wheel to change lanes.\n" +
                                                           "Nudgeless changes lanes as soon as you signal. A time waits that long first.\n" +
                                                           "Off: zoompilot never changes lanes."))
-    self._lc_one_per_signal = BigParamControl(tr("one per signal"), "OneLaneChange")
+    self._lc_one_per_signal = BigParamControlSP(tr("one per signal"), "OneLaneChange",
+                                                description=tr("Allows at most one lane change until you release the turn signal."))
     self._lc_bsm = BigParamControlSP(tr("bsm delay"), "AutoLaneChangeBsmDelay",
                                      depends_on=lambda: self._bsm_applies(self._alc_val) and self._car_has_bsm(),
                                      description=tr("Waits an extra second after the blind spot clears."))
@@ -170,9 +173,13 @@ class SteeringLayoutMici(NavScroller):
                          for big, size, driver in ((False, tr("small models"), tr("The steering tune used while a small model drives.")),
                                                    (True, tr("big models"), tr("The steering tune used while a big model drives.")))]
 
-    self._tq_predictive = BigParamControl(tr("predictive turn-in"), "TorqueTuneV2PredictiveTurnIn")
+    self._tq_predictive = BigParamControlSP(tr("predictive turn-in"), "TorqueTuneV2PredictiveTurnIn",
+                                            description=tr("Steers into curves a little earlier by anticipating the planned steering.\n" +
+                                                           "Only the v2 tune uses it; a change applies on the next drive."))
     self._tq_mazda_v2_mode = BigMultiParamToggleSP(tr("B: 5–10 m/s test\nMax unchanged\nReboot to apply"), "MazdaTorqueV2Mode",
-                                                   [tr("A"), tr("B")], values=[0, 1])
+                                                   [tr("A"), tr("B")], values=[0, 1],
+                                                   description=tr("A keeps the current v2 behavior. B tests a 5–10 m/s low-speed retaper.\n" +
+                                                                  "Maximum steering authority is unchanged. Change offroad, then reboot."))
     self._tq_mazda_v2_mode.set_enabled(ui_state.is_offroad)
     # v2-only mechanism: enabled offroad while some model size will actually run v2
     self._tq_predictive.set_enabled(lambda: ui_state.is_offroad() and any(v == 2.0 for v in resolved_tune_versions(ui_state.params).values()))

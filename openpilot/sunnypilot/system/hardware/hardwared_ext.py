@@ -49,7 +49,9 @@ class HardwaredExt:
 
   def __init__(self, params: Params) -> None:
     self.params = params
-    self.handback = StockEcuHandBackGate(params)
+    self.handback = StockEcuHandBackGate(params, owner="hardwared")
+    self.draining: int | None = None
+    self.drain_failed = False
     self.now = time.monotonic
     self.accelerator_off_ts: float | None = None
 
@@ -71,9 +73,6 @@ class HardwaredExt:
       jetlink_adapter.request_shutdown(f"comma shutting down, offroad since {off_ts}")
       self.accelerator_off_ts = self.now()
     return not jetlink_adapter.shutdown_pending() or self.now() - self.accelerator_off_ts >= ACCELERATOR_OFF_WAIT_T
-    self.handback = StockEcuHandBackGate(params, owner="hardwared")
-    self.draining: int | None = None
-    self.drain_failed = False
 
   def update(self, started: bool) -> bool:
     cycle = self.params.get_bool("OnroadCycleRequested")

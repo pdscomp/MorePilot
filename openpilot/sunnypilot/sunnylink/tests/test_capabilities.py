@@ -94,7 +94,7 @@ class TestCapabilitiesShape(OpenpilotTestCase):
 
 
 class TestIcbmApplicable(OpenpilotTestCase):
-  """sunnylink's ICBM enablement reads this field, so it must be the device's own icbm_applicable."""
+  """sunnylink's cruise rules read has_icbm wherever the car has ICBM."""
 
   def _caps(self, op_long: bool, pcm_cruise: bool):
     from opendbc.car.structs import car
@@ -109,13 +109,13 @@ class TestIcbmApplicable(OpenpilotTestCase):
 
   def test_alpha_long_on_a_pcm_cruise_car(self):
     # Mazda alpha long: the body still keeps the set speed, so the buttons have something to move
-    assert self._caps(op_long=True, pcm_cruise=True)["icbm_applicable"]
+    assert self._caps(op_long=True, pcm_cruise=True)["has_icbm"]
 
   def test_openpilot_owns_the_set_speed(self):
-    assert not self._caps(op_long=True, pcm_cruise=False)["icbm_applicable"]
+    assert not self._caps(op_long=True, pcm_cruise=False)["has_icbm"]
 
   def test_stock_cruise(self):
-    assert self._caps(op_long=False, pcm_cruise=True)["icbm_applicable"]
+    assert self._caps(op_long=False, pcm_cruise=True)["has_icbm"]
 
 
 class TestPlatformCapability(OpenpilotTestCase):

@@ -250,7 +250,7 @@ def _ti_legacy_seed_layout(cp: dict) -> tuple[int, list]:
   """(seed_version, bin centers) expected for this car from the ported ti_legacy seed table,
   with the same steering-floor bin drop as get_speed_dep_config_for_car."""
   from opendbc.sunnypilot.car.interfaces import get_ti_legacy_speed_dep_config  # lazy
-  from openpilot.sunnypilot.selfdrive.locationd.torqued_ext import DEFAULT_SPEED_BIN_CENTERS  # lazy
+  from openpilot.sunnypilot.selfdrive.locationd.speed_bin_learner import DEFAULT_SPEED_BIN_CENTERS  # lazy
   cfg = get_ti_legacy_speed_dep_config().get(cp["fingerprint"], {})
   centers = list(cfg.get("speed_bp", []))
   if centers and cp["min_steer_speed"] > 0:
@@ -296,7 +296,7 @@ def _ti_legacy_learning_verified(params, cp: dict, prev_cp: dict | None) -> bool
   sp_cache = params.get("LiveTorqueParametersSP")
   if sp_cache is not None:
     try:
-      from openpilot.sunnypilot.selfdrive.locationd.torqued_ext import LIVE_TORQUE_PARAMETERS_SP_SERVICE  # lazy
+      from openpilot.sunnypilot.selfdrive.locationd.speed_bin_learner import LIVE_TORQUE_PARAMETERS_SP_SERVICE  # lazy
       with log.Event.from_bytes(sp_cache) as evt:
         cache_sp = getattr(evt, LIVE_TORQUE_PARAMETERS_SP_SERVICE)
         seed_version, centers = _ti_legacy_seed_layout(cp)

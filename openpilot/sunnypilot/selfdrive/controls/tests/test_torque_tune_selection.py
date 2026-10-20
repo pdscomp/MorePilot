@@ -301,7 +301,7 @@ class TestTorqueTuneTiSeed:
     _with_fingerprint(controls, "MAZDA_CX8_2022")
     params.put_bool("TorqueInterceptorEnabled", True, block=True)
     select(controls)
-    _assert_seeds(params, controlsd_ext.TI_TUNE_SEEDS)
+    _assert_seeds(params, controls_lateral_zp.TI_TUNE_SEEDS)
     # owner-validated: "Live Delay" (lagd learner) beats a fixed manual delay, so the CX-8
     # gets NO delay seed — stock LagdToggle=1 default applies and stays user-changeable
     assert params.get("LagdToggle") is None
@@ -312,7 +312,7 @@ class TestTorqueTuneTiSeed:
     _with_fingerprint(controls, "MAZDA_CX5_2022")
     params.put_bool("TorqueInterceptorEnabled", True, block=True)
     select(controls)
-    _assert_seeds(params, controlsd_ext.TI_TUNE_SEEDS)
+    _assert_seeds(params, controls_lateral_zp.TI_TUNE_SEEDS)
     assert params.get("LagdToggle") is None
     assert params.get("LagdToggleDelay") is None
 
@@ -332,7 +332,7 @@ class TestTorqueTuneTiSeed:
     params.put_bool("TorqueInterceptorEnabled", True, block=True)
     assert select(controls) == V2
     assert params.get("TorqueControlTune", return_default=True) == 2.0
-    for key in controlsd_ext.TI_TUNE_SEEDS:
+    for key in controls_lateral_zp.TI_TUNE_SEEDS:
       assert params.get(key) is None, key
 
   def test_cx8_2023_ti_seeds_tune_without_bundle(self, ctx):
@@ -343,5 +343,5 @@ class TestTorqueTuneTiSeed:
     params.put_bool("TorqueInterceptorEnabled", True, block=True)
     assert select(controls) == V2
     assert params.get("TorqueControlTune", return_default=True) == 2.0
-    for key in controlsd_ext.TI_TUNE_SEEDS:
+    for key in controls_lateral_zp.TI_TUNE_SEEDS:
       assert params.get(key) is None, key

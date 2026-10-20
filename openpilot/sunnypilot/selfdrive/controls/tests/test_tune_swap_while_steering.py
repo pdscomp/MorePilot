@@ -17,13 +17,16 @@ import pytest
 
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque as LatControlTorqueV1
 from openpilot.sunnypilot.selfdrive.controls.controls_lateral_zp import TUNE_SWAP_INACTIVE_FRAMES, ControlsLateralZP
+from openpilot.sunnypilot.selfdrive.controls.lib.lane_change_smoothing import LaneChangeSmoothing
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v2 import LatControlTorque as LatControlTorqueV2
-from openpilot.sunnypilot.selfdrive.controls.lib.tests.torque_harness import FRICTION, LAT_DELAY, LP, VM, make_cs, make_lac, step
+from openpilot.sunnypilot.selfdrive.controls.lib.tests.torque_harness import FRICTION, LAT_DELAY, LP, VM, make_cp, make_cs, make_lac, step
+from openpilot.sunnypilot.selfdrive.controls.lib.turn_assist import TurnAssistController
 
 V_EGO = 10.0
 LAT_ACCEL = 0.8           # a steady curve, and the car following it
+CURVATURE = LAT_ACCEL / V_EGO ** 2
 HAND_BACK = 200           # the frame the small model's first modelV2 arrives, v1 settled
-DRIVE_ARGS = (VM, LP, False, LAT_ACCEL / V_EGO ** 2, None, False, LAT_DELAY)
+DRIVE_ARGS = (VM, LP, False, CURVATURE, None, False, LAT_DELAY)
 
 
 class FakeSubMaster:
@@ -61,6 +64,8 @@ def drive(ctl, hand_back: bool, inactive_at: int | None = None, frames: int = 30
     active = (inactive_at is None or i < inactive_at) and i not in (inactive or ())
     torque, _, _ = ctl.LaC.update(active, make_cs(V_EGO, LAT_ACCEL), *DRIVE_ARGS)
     ControlsLateralZP.note_lat_active(ctl, active)
+    if counts is not None:
+      counts.append(ctl._inactive_frames)
     out.append(torque)
     ControlsLateralZP.select_lateral_control(ctl, {'modelV2': SimpleNamespace(big=not (hand_back and i >= HAND_BACK))})
   return out
