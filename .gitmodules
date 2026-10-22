@@ -23,4 +23,4 @@
   url = https://github.com/sunnypilot/neural-network-data.git
 [submodule "jetlink"]
   path = jetlink_repo
-  url = https://github.com/zoompilot/jetlink.git
+  url = https://github.com/pdscomp/jetlink.git
