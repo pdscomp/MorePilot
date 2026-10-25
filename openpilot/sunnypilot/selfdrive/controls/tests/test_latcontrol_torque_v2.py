@@ -848,3 +848,19 @@ class TestReleaseErrorRamp:
       la = step(v2a, make_cs(v_ego), desired)
       lb = step(v2b, make_cs(v_ego), desired)
       assert la.desiredLateralAccel == pytest.approx(lb.desiredLateralAccel, abs=1e-9), f"frame {i}"
+
+
+@pytest.mark.parametrize("pressed", [False, True])
+def test_driver_override_damping_gate(params, pressed):
+  lac = make_lac(LatControlTorqueV2)
+  step(lac, make_cs(v_ego=10.0, lat_accel=0.0), 0.0, active=False)
+  result = step(lac, make_cs(v_ego=10.0, lat_accel=0.3, pressed=pressed), 0.0)
+  assert lac.measurement_rate_filter.x != 0.0
+  if pressed:
+    assert result.d == 0.0
+  else:
+    assert result.d != 0.0
+
+  # Release resumes damping using continuously maintained measurement history.
+  released = step(lac, make_cs(v_ego=10.0, lat_accel=0.6, pressed=False), 0.0)
+  assert released.d != 0.0

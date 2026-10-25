@@ -401,8 +401,9 @@ class LatControlTorque(LatControlTorqueV0):
         # against a future override controller double-integrating the shared PID.
         output_torque = 0.0
       else:
+        # Driver wheel motion must not generate an opposing derivative command.
         output_lataccel = self.pid.update(pid_log.error,
-                                         -measurement_rate,
+                                         0.0 if CS.steeringPressed else -measurement_rate,
                                           feedforward=ff,
                                           speed=CS.vEgo,
                                           freeze_integrator=freeze_integrator)
