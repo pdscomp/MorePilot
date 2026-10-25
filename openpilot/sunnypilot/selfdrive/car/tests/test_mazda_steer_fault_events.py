@@ -51,6 +51,16 @@ class TestMazdaSteerFaultEvents:
     assert not events.contains(ET.SOFT_DISABLE)
     assert not events.contains(ET.NO_ENTRY)
 
+  def test_donor_eps_with_ti_keeps_genuine_fault_escalation(self):
+    flags = MazdaFlags.GEN1 | MazdaFlags.STEER_TO_ZERO_EPS | MazdaFlags.TORQUE_INTERCEPTOR
+    car_events = _car_events('mazda', flags)
+    events = _events(EventName.steerTempUnavailable)
+    car_events.update(structs.CarState(), events, _car_state_sp())
+    assert events.has(EventName.steerTempUnavailable)
+    assert not events.has(EventName.steerTempUnavailableSilent)
+    assert events.contains(ET.SOFT_DISABLE)
+    assert events.contains(ET.NO_ENTRY)
+
   def test_older_eps_keeps_upstream_escalation(self):
     car_events = _car_events('mazda', MazdaFlags.GEN1)
     events = _events(EventName.steerTempUnavailable)

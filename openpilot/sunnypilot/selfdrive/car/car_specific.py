@@ -62,11 +62,11 @@ class CarSpecificEventsSP:
             events.remove(EventName.resumeRequired)
 
     elif self.CP.brand == 'mazda':
-      if self.CP.flags & MazdaFlags.STEER_TO_ZERO_EPS and events.has(EventName.steerTempUnavailable):
-        # steerFaultTemporary on this EPS is the non-delivery latch reporting a sustained
-        # road-speed block. The latch has already zeroed the command, so there is nothing
-        # for a soft disable to protect; it only costs MADS its lateral after 3 s and
-        # shouts at the driver. Keep the banner, drop the escalation.
+      if (self.CP.flags & MazdaFlags.STEER_TO_ZERO_EPS
+          and not self.CP.flags & MazdaFlags.TORQUE_INTERCEPTOR
+          and events.has(EventName.steerTempUnavailable)):
+        # Native EPS only: its non-delivery latch already zeroes the command.
+        # TI faults are genuine steering failures and must retain soft-disable/no-entry.
         events.remove(EventName.steerTempUnavailable)
         events.add(EventName.steerTempUnavailableSilent)
       if mads_enabled_toggle and CS.invalidLkasSetting:
