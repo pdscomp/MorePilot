@@ -377,6 +377,11 @@
                       "type": "param",
                       "key": "NeuralNetworkLateralControl",
                       "equals": false
+                    },
+                    {
+                      "type": "capability",
+                      "field": "torque_jerk_aware_available",
+                      "equals": true
                     }
                   ]
                 },
@@ -530,8 +535,8 @@
                 {
                   "key": "MazdaTorqueV2Mode",
                   "widget": "multiple_button",
-                  "title": "CX-5 Torque v2 A/B",
-                  "description": "A keeps the current controller. B uses the experimental 5\u201310 m/s low-speed retaper. Maximum steering authority is unchanged. Reboot after changing.",
+                  "title": "CX-5 Torque V42 A/B",
+                  "description": "A keeps the current V42 controller. B uses the experimental 5\u201310 m/s low-speed retaper. Maximum steering authority is unchanged. Reboot after changing.",
                   "options": [
                     {
                       "value": 0,

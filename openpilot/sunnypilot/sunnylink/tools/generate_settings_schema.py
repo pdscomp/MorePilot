@@ -43,7 +43,10 @@ def _build_torque_options(versions: dict) -> list[dict]:
     except (KeyError, TypeError, ValueError):
       continue
   for version, label in sorted(parsed, key=lambda kv: kv[0], reverse=True):
-    options.append({"value": version, "label": label})
+    option = {"value": version, "label": label}
+    if version in (40.0, 42.0):
+      option["enablement"] = [{"type": "capability", "field": "mazda_ti_tunes_available", "equals": True}]
+    options.append(option)
   return options
 
 
@@ -157,6 +160,8 @@ def collect_all_keys(schema: dict) -> set[str]:
       keys.add(item["key"])
     _walk_rules(item.get("visibility"), _visit_rule)
     _walk_rules(item.get("enablement"), _visit_rule)
+    for option in item.get("options", []):
+      _walk_rules(option.get("enablement"), _visit_rule)
 
   _walk_all_items(schema, _visit_item)
   return keys
@@ -173,6 +178,8 @@ def collect_capability_refs(schema: dict) -> set[str]:
   def _visit_item(item: dict) -> None:
     _walk_rules(item.get("visibility"), _visit_rule)
     _walk_rules(item.get("enablement"), _visit_rule)
+    for option in item.get("options", []):
+      _walk_rules(option.get("enablement"), _visit_rule)
 
   _walk_all_items(schema, _visit_item)
   return refs

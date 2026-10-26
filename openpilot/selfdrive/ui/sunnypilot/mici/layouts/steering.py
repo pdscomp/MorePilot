@@ -19,7 +19,8 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.mads.helpers import MadsSteeringModeOnBrake, get_mads_limited_brands
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AUTO_LANE_CHANGE_TIMER, AutoLaneChangeMode
 from openpilot.sunnypilot.selfdrive.controls.lib.lane_change_smoothing import LEVEL_OFF, read_level
-from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import TUNE_PARAM_BY_SIZE, jerk_aware_has_effect, mazda_v2_ab_available, resolved_tune_versions, versions_by_label
+from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import TUNE_PARAM_BY_SIZE, jerk_aware_has_effect, mazda_v2_ab_available, resolved_tune_versions, \
+  ti_tune_eligible, versions_by_label
 from openpilot.system.ui.lib.application import gui_app
 
 MADS_STEERING_MODE_LABELS = [tr("remain"), tr("pause"), tr("disengage")]
@@ -161,7 +162,7 @@ class SteeringLayoutMici(NavScroller):
                                                                "The wheel moves more smoothly through turns."))
     self._jerk_aware_toggle.set_enabled(lambda: ui_state.is_offroad() and
                                         not ui_state.params.get_bool("NeuralNetworkLateralControl"))
-    self._jerk_aware_toggle.set_superseded(lambda: not jerk_aware_has_effect(ui_state.params))
+    self._jerk_aware_toggle.set_superseded(lambda: not jerk_aware_has_effect(ui_state.params, ui_state.CP))
 
     # An unset version resolves through the param default. Keep a fallback for unreadable metadata.
     tq_versions = versions_by_label() or {tr("default"): 2.0}
@@ -173,12 +174,17 @@ class SteeringLayoutMici(NavScroller):
                          for big, size, driver in ((False, tr("small models"), tr("The steering tune used while a small model drives.")),
                                                    (True, tr("big models"), tr("The steering tune used while a big model drives.")))]
 
+    for big, item in zip((False, True), self._tq_versions, strict=True):
+      item.set_blocked_options(lambda item=item: {i for i, value in enumerate(item._values or [])
+                                                if value in (40.0, 42.0) and not ti_tune_eligible(ui_state.CP)})
+      item.set_value_resolver(lambda big=big: resolved_tune_versions(ui_state.params, CP=ui_state.CP)[big])
+
     self._tq_predictive = BigParamControlSP(tr("predictive turn-in"), "TorqueTuneV2PredictiveTurnIn",
                                             description=tr("Steers into curves a little earlier by anticipating the planned steering.\n" +
                                                            "Only the v2 tune uses it; a change applies on the next drive."))
     self._tq_mazda_v2_mode = BigMultiParamToggleSP(tr("B: 5–10 m/s test\nMax unchanged\nReboot to apply"), "MazdaTorqueV2Mode",
                                                    [tr("A"), tr("B")], values=[0, 1],
-                                                   description=tr("A keeps the current v2 behavior. B tests a 5–10 m/s low-speed retaper.\n" +
+                                                   description=tr("A keeps the current V42 behavior. B tests a 5–10 m/s low-speed retaper.\n" +
                                                                   "Maximum steering authority is unchanged. Change offroad, then reboot."))
     self._tq_mazda_v2_mode.set_enabled(ui_state.is_offroad)
     # v2-only mechanism: enabled offroad while some model size will actually run v2

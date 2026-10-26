@@ -234,8 +234,12 @@ class BigMultiParamToggleSP(SupersededPill, BigMultiParamToggle):
   def __init__(self, text: str, param: str, options: list[str], values: list | None = None, **kwargs):
     assert values is None or len(values) == len(options)
     self._values = values  # BigMultiParamToggle.__init__ calls _load_value
+    self._value_resolver: Callable[[], float | None] | None = None
     super().__init__(text, param, options, **kwargs)
     self._blocked_options: Callable[[], set[int]] | None = None
+
+  def set_value_resolver(self, resolver: Callable[[], float | None] | None):
+    self._value_resolver = resolver
 
   def set_blocked_options(self, blocked: Callable[[], set[int]] | None):
     """Option indices a tap skips over; the stored value is left alone if it is one of them."""
@@ -263,7 +267,7 @@ class BigMultiParamToggleSP(SupersededPill, BigMultiParamToggle):
   def _index_from_value(self) -> int:
     """Match the stored value against self._values; unset resolves to the param's declared default."""
     assert self._values is not None
-    raw = self._params.get(self._param, return_default=True)
+    raw = self._value_resolver() if self._value_resolver is not None else self._params.get(self._param, return_default=True)
     for i, val in enumerate(self._values):
       try:
         if math.isclose(float(val), float(raw), rel_tol=1e-5):

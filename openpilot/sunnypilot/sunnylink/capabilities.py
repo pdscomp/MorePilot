@@ -14,7 +14,7 @@ from opendbc.sunnypilot.car.tesla.values import TeslaFlagsSP
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.hardware import HARDWARE
-from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import mazda_v2_ab_available
+from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import jerk_aware_has_effect, mazda_v2_ab_available, ti_tune_eligible
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import icbm_applicable
 
 
@@ -33,6 +33,8 @@ CAPABILITY_FIELDS = (
   "brand",
   "platform",
   "mazda_torque_v2_ab_available",
+  "mazda_ti_tunes_available",
+  "torque_jerk_aware_available",
   "pcm_cruise",
   "alpha_long_available",
   "steer_control_type",
@@ -56,7 +58,9 @@ CAPABILITY_LABELS: dict[str, str] = {
   "torque_allowed": "torque steering (not available for angle steering vehicles)",
   "brand": "Vehicle brand",
   "platform": "Vehicle platform",
-  "mazda_torque_v2_ab_available": "Mazda Torque v2 A/B available",
+  "mazda_torque_v2_ab_available": "Mazda Torque V42 A/B available",
+  "mazda_ti_tunes_available": "Mazda TI v40/v42 tunes available",
+  "torque_jerk_aware_available": "Jerk-aware control has an effect",
   "pcm_cruise": "PCM cruise",
   "alpha_long_available": "Alpha Longitudinal available",
   "steer_control_type": "Steer control type",
@@ -177,6 +181,8 @@ def generate_capabilities(params: Params | None = None) -> dict:
       cloudlog.exception("capabilities: failed to deserialize CarParamsPersistent")
 
   caps["mazda_torque_v2_ab_available"] = mazda_v2_ab_available(params, CP)
+  caps["mazda_ti_tunes_available"] = ti_tune_eligible(CP)
+  caps["torque_jerk_aware_available"] = CP is not None and jerk_aware_has_effect(params, CP)
 
   # CarParamsSP-derived capabilities
   CP_SP_bytes = params.get("CarParamsSPPersistent")

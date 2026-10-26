@@ -149,6 +149,9 @@ def collect_rules_from_item(item: dict) -> list[tuple[str, list[dict]]]:
     result.append((f"item '{key}' visibility", item["visibility"]))
   if "enablement" in item:
     result.append((f"item '{key}' enablement", item["enablement"]))
+  for option in item.get("options", []):
+    if "enablement" in option:
+      result.append((f"item '{key}' option enablement", option["enablement"]))
   return result
 
 

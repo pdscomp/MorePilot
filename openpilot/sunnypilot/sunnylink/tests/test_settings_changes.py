@@ -227,27 +227,16 @@ class TestOneLaneChange(OpenpilotTestCase):
     assert item["description"] == "Allow at most one lane change until the turn signal is released."
 
 
-class TestMazdaTorqueV2Mode(OpenpilotTestCase):
-  def test_selector_options_text_and_gates(self, schema):
-    item = _find_item(schema, "MazdaTorqueV2Mode")
-    assert item is not None
-    assert item["widget"] == "multiple_button"
-    assert item["options"] == [
-      {"value": 0, "label": "A (Current)"},
-      {"value": 1, "label": "B (Low-speed retaper)"},
-    ]
-
-    description = item["description"].lower()
-    assert "experimental" in description
-    assert "maximum steering authority is unchanged" in description
-    assert "reboot after changing" in description
-
-    assert item["visibility"] == [
-      {"type": "capability", "field": "mazda_torque_v2_ab_available", "equals": True},
-    ]
-    rules = json.dumps(item["visibility"] + item["enablement"])
-    assert "TorqueInterceptorEnabled" not in rules
-    assert item["enablement"] == [{"type": "offroad_only"}]
+class TestTiTuneOptionAvailability(OpenpilotTestCase):
+  def test_ti_options_have_exact_capability_gate(self, schema):
+    expected = [{"type": "capability", "field": "mazda_ti_tunes_available", "equals": True}]
+    for key in TORQUE_TUNE_KEYS:
+      item = _find_item(schema, key)
+      for option in item["options"]:
+        version = float(option["value"])
+        assert option.get("enablement") == (expected if version in (40.0, 42.0) else None)
+    assert "mazda_ti_tunes_available" in schema["capability_fields"]
+    assert "torque_jerk_aware_available" in schema["capability_fields"]
 
 
 class TestReleaseBranchGates(OpenpilotTestCase):

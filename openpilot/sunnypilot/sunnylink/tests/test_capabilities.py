@@ -120,19 +120,25 @@ class TestIcbmApplicable(OpenpilotTestCase):
 
 class TestPlatformCapability(OpenpilotTestCase):
   @staticmethod
-  def _params_with_cp(platform: str, *, steer_at_standstill: bool = True, torque_tuning: bool = True) -> Params:
+  def _params_with_cp(platform: str, *, steer_at_standstill: bool = True, torque_tuning: bool = True, ti: bool = True) -> Params:
+    from opendbc.car.mazda.values import MazdaFlags
     params = Params()
     CP = car.CarParams.new_message(carFingerprint=platform, brand="mazda", steerAtStandstill=steer_at_standstill)
+    if ti:
+      CP.flags = int(MazdaFlags.TORQUE_INTERCEPTOR)
     CP.lateralTuning.init("torque" if torque_tuning else "pid")
     params.put("CarParamsPersistent", CP.to_bytes(), block=True)
     return params
 
   def _ab_available(self, platform: str = "MAZDA_CX5", *, ti: bool = True, steer_at_standstill: bool = True,
-                    torque_tuning: bool = True, tune_version: float = 2.0, bundle_platform: str | None = None) -> bool:
-    params = self._params_with_cp(platform, steer_at_standstill=steer_at_standstill, torque_tuning=torque_tuning)
+                    torque_tuning: bool = True, tune_version: float = 42.0, big_tune_version: float | None = None,
+                    bundle_platform: str | None = None) -> bool:
+    params = self._params_with_cp(platform, steer_at_standstill=steer_at_standstill, torque_tuning=torque_tuning, ti=ti)
     params.put_bool("TorqueInterceptorEnabled", ti, block=True)
     params.put_bool("EnforceTorqueControl", True, block=True)
     params.put("TorqueControlTune", tune_version, block=True)
+    if big_tune_version is not None:
+      params.put("TorqueControlTuneBig", big_tune_version, block=True)
     if bundle_platform:
       params.put("CarPlatformBundle", {"brand": "mazda", "platform": bundle_platform}, block=True)
     return generate_capabilities(params)["mazda_torque_v2_ab_available"]
@@ -158,8 +164,31 @@ class TestPlatformCapability(OpenpilotTestCase):
       ("non_stz", {"steer_at_standstill": False}, False),
       ("non_torque", {"torque_tuning": False}, False),
       ("non_v2", {"tune_version": 1.0}, False),
+      ("baseline_v2", {"tune_version": 2.0}, False),
+      ("v42", {"tune_version": 42.0}, True),
+      ("big_only_v42", {"tune_version": 40.0, "big_tune_version": 42.0}, True),
       ("bundle_cx5_native_2022", {"platform": "MAZDA_CX5_2022", "bundle_platform": "MAZDA_CX5"}, False),
     ]
     for name, kwargs, expected in cases:
       with self.subTest(name=name):
         assert self._ab_available(**kwargs) is expected
+
+
+class TestTiTuneCapabilities(OpenpilotTestCase):
+  def test_ti_tune_capability_uses_final_cp_not_stored_toggle(self):
+    params = TestPlatformCapability._params_with_cp("MAZDA_CX5", ti=True)
+    params.put_bool("TorqueInterceptorEnabled", False, block=True)
+    params.put_bool("EnforceTorqueControl", True, block=True)
+    params.put("TorqueControlTune", 42.0, block=True)
+    params.put("TorqueControlTuneBig", 42.0, block=True)
+    caps = generate_capabilities(params)
+    assert caps["mazda_ti_tunes_available"] is True
+    assert caps["torque_jerk_aware_available"] is False
+
+    params = TestPlatformCapability._params_with_cp("MAZDA_CX5", ti=False)
+    params.put_bool("TorqueInterceptorEnabled", True, block=True)
+    params.put("TorqueControlTune", 40.0, block=True)
+    params.put("TorqueControlTuneBig", 42.0, block=True)
+    caps = generate_capabilities(params)
+    assert caps["mazda_ti_tunes_available"] is False
+    assert caps["torque_jerk_aware_available"] is True

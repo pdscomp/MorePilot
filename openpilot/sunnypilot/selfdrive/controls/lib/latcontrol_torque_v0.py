@@ -28,15 +28,6 @@ KD = 0.0
 INTERP_SPEEDS = [1, 1.5, 2.0, 3.0, 5, 7.5, 10, 15, 30]
 KP_INTERP = [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, KP]
 
-# Steer-at-standstill (TI) platforms drive where the schedule's low-speed heat
-# (kp 30-250 below 20 kph) was never meant to run: sub-0.1 m/s2 tracking errors pin
-# the output rail-to-rail (owner-verified CX-8 wiggle, 150-220 reversals/min at
-# <30 kph with p95 output at full scale). Cap the low end; >=10 m/s (36 kph) is
-# bit-identical to stock. 4.0 is the replay sweep knee on the owner's r19 segments:
-# 10-20 kph reversals -61% (108->43/min), flat across a 0-300 ms assumed-delay sweep,
-# rms authority preserved (0.47 vs 0.52); lower caps buy little and cost turn response.
-TI_LOW_SPEED_KP_CAP = 4.0
-
 LP_FILTER_CUTOFF_HZ = 1.2
 LAT_ACCEL_REQUEST_BUFFER_SECONDS = 1.0
 FRICTION_THRESHOLD = 0.3
@@ -44,15 +35,12 @@ VERSION = 0
 
 
 class LatControlTorque(LatControl):
-  KD_SCHEDULE = KD  # v2 subclasses override with the low-speed damping schedule
-
   def __init__(self, CP, CP_SP, CI, dt):
     super().__init__(CP, CP_SP, CI, dt)
     self.torque_params = CP.lateralTuning.torque.as_builder()
     self.torque_from_lateral_accel = CI.torque_from_lateral_accel()
     self.lateral_accel_from_torque = CI.lateral_accel_from_torque()
-    kp_table = [min(k, TI_LOW_SPEED_KP_CAP) for k in KP_INTERP] if CP.steerAtStandstill and CP.brand == 'mazda' else KP_INTERP
-    self.pid = PIDController([INTERP_SPEEDS, kp_table], KI, self.KD_SCHEDULE, rate=1/self.dt)
+    self.pid = PIDController([INTERP_SPEEDS, KP_INTERP], KI, KD, rate=1/self.dt)
     self.update_limits()
     self.steering_angle_deadzone_deg = self.torque_params.steeringAngleDeadzoneDeg
     self.lat_accel_request_buffer_len = int(LAT_ACCEL_REQUEST_BUFFER_SECONDS / self.dt)

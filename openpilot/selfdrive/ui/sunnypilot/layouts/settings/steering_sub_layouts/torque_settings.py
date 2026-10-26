@@ -9,8 +9,8 @@ import pyray as rl
 
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import (TUNE_PARAM_BY_SIZE, jerk_aware_has_effect, label_for,
-                                                                      mazda_v2_ab_available, resolved_tune_versions, stored_tune_versions,
-                                                                      versions_by_label)
+                                                                      mazda_v2_ab_available, resolved_tune_versions,
+                                                                      ti_tune_eligible, versions_by_label)
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.lib.utils import NoElideButtonAction
@@ -106,9 +106,9 @@ class TorqueSettingsLayout(Widget):
     )
 
     self._mazda_v2_mode = multiple_button_item_sp(
-      title=lambda: tr("CX-5 Torque v2 A/B"),
+      title=lambda: tr("CX-5 Torque V42 A/B"),
       description=lambda: tr(
-        "A keeps the current Torque v2 behavior. B uses the experimental 5–10 m/s " +
+        "A keeps the current Torque V42 behavior. B uses the experimental 5–10 m/s " +
         "low-speed retaper. Maximum steering authority is unchanged. Change while offroad, then reboot."
       ),
       buttons=[lambda: tr("A"), lambda: tr("B")],
@@ -135,7 +135,7 @@ class TorqueSettingsLayout(Widget):
     nnlc_enabled = ui_state.params.get_bool("NeuralNetworkLateralControl")
     # v2 tune replaces the jerk-aware mechanisms and forces the controller off, so the
     # toggle is disabled while v2 is the tune every model size will actually run
-    self._jerk_aware_toggle.action_item.set_enabled(ui_state.is_offroad() and not nnlc_enabled and jerk_aware_has_effect(ui_state.params))
+    self._jerk_aware_toggle.action_item.set_enabled(ui_state.is_offroad() and not nnlc_enabled and jerk_aware_has_effect(ui_state.params, ui_state.CP))
     # predictive turn-in is a v2-only mechanism: hidden unless some model size will actually run v2
     v2_runs = any(v == 2.0 for v in resolved_tune_versions(ui_state.params).values())
     self._predictive_toggle.set_visible(v2_runs)
@@ -162,7 +162,7 @@ class TorqueSettingsLayout(Widget):
     title_text = tr("Real-Time & Offline") if ui_state.params.get("TorqueParamsOverrideEnabled") else tr("Offline Only")
     self._torque_lat_accel_factor.set_title(lambda: tr("Lateral Acceleration Factor") + " (" + title_text + ")")
     self._torque_friction.set_title(lambda: tr("Friction") + " (" + title_text + ")")
-    for big, version in stored_tune_versions(ui_state.params).items():
+    for big, version in resolved_tune_versions(ui_state.params, CP=ui_state.CP).items():
       self._tune_rows[big].action_item.set_value(self._version_label(version))
 
   def _render(self, rect):
@@ -175,17 +175,18 @@ class TorqueSettingsLayout(Widget):
   def show_event(self):
     self._scroller.show_event()
 
-  def _version_label(self, version: float) -> str:
+  def _version_label(self, version: float | None) -> str:
     # the stored value resolves through the declared param default, the same read
     # controlsd_ext makes: a "Default" placeholder would hide which tune the car actually runs
     return label_for(version, self.cached_torque_versions) or tr("Unknown")
 
   def _show_torque_version_dialog(self, big: bool):
-    options_map = self.cached_torque_versions
+    options_map = {label: version for label, version in self.cached_torque_versions.items()
+                   if version not in (40.0, 42.0) or ti_tune_eligible(ui_state.CP)}
     # newest first
     sorted_labels = sorted(options_map, key=lambda k: options_map[k], reverse=True)
     folders = [TreeFolder("", [TreeNode(label) for label in sorted_labels])]
-    current_label = self._version_label(stored_tune_versions(ui_state.params)[big])
+    current_label = self._version_label(resolved_tune_versions(ui_state.params, CP=ui_state.CP)[big])
 
     def handle_selection(result: int):
       if result == DialogResult.CONFIRM and self._torque_version_dialog:

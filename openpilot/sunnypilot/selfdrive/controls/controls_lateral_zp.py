@@ -16,8 +16,10 @@ from openpilot.sunnypilot.selfdrive.locationd.speed_bin_learner import LIVE_TORQ
 from openpilot.sunnypilot.selfdrive.controls.lib.lane_change_smoothing import LaneChangeSmoothing, clip_curvature_rate
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import LatControlTorque as LatControlTorqueV0
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v2 import LatControlTorque as LatControlTorqueV2
+from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v40 import LatControlTorque as LatControlTorqueV40
+from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v42 import LatControlTorque as LatControlTorqueV42
 from openpilot.sunnypilot.selfdrive.controls.lib.steer_limit import classify
-from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import resolved_mazda_v2_mode, resolved_tune_versions
+from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import resolved_mazda_v2_mode, resolved_tune_versions, stored_tune_versions, ti_tune_eligible
 
 # how long lateral control has to be inactive, continuously, before the torque tune follows
 # a model change: a one-frame drop (a steer fault flicker) would otherwise swap and resume
@@ -91,14 +93,21 @@ class ControlsLateralZP:
     # enforce-off, or any tune version) is a set param and always persists.
     seed_ti_defaults(self.params, self.CP)
 
-    versions = resolved_tune_versions(self.params, self.CP.lateralTuning.which() == 'torque')
+    versions = resolved_tune_versions(self.params, self.CP.lateralTuning.which() == 'torque', CP=self.CP)
+    for big, requested in stored_tune_versions(self.params).items():
+      if requested in (40.0, 42.0) and versions[big] != requested:
+        cloudlog.warning("controlsd: unsupported TI tune %.1f on this car; using v0", requested)
 
     def build(version):
+      ti_tune = ti_tune_eligible(self.CP)
+      if version == 40.0 and ti_tune:
+        return LatControlTorqueV40(self.CP, self.CP_SP, CI, dt)
+      if version == 42.0 and ti_tune:
+        return LatControlTorqueV42(self.CP, self.CP_SP, CI, dt, mazda_v2_mode=resolved_mazda_v2_mode(self.params, self.CP))
       if version == 0.0:
         return LatControlTorqueV0(self.CP, self.CP_SP, CI, dt)
       if version == 2.0:
-        # the CX-5 TI A/B mode is reboot-applied at build time (MazdaTorqueV2Mode param)
-        return LatControlTorqueV2(self.CP, self.CP_SP, CI, dt, mazda_v2_mode=resolved_mazda_v2_mode(self.params, self.CP))
+        return LatControlTorqueV2(self.CP, self.CP_SP, CI, dt)
       return lac
 
     built = {version: build(version) for version in dict.fromkeys(versions.values())}

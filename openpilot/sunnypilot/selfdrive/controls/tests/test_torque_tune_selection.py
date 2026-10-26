@@ -24,6 +24,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from opendbc.car.structs import car
+from opendbc.car.mazda.values import MazdaFlags
 from openpilot.cereal import custom
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
@@ -41,7 +42,9 @@ class FakeLaC(str):
 V0 = "v0"
 V1 = "v1"  # stands in for the `lac` upstream controller controlsd passes in
 V2 = "v2"
-BY_VERSION = {0.0: V0, 1.0: V1, 2.0: V2}
+V40 = "v40"
+V42 = "v42"
+BY_VERSION = {0.0: V0, 1.0: V1, 2.0: V2, 40.0: V40, 42.0: V42}
 PARAMS_KEYS_H = Path(__file__).resolve().parents[5] / "openpilot" / "common" / "params_keys.h"
 
 
@@ -63,10 +66,13 @@ def require_current_libparams(params, *keys: str) -> None:
 def ctx(monkeypatch):
   monkeypatch.setattr(controls_lateral_zp, "LatControlTorqueV0", lambda *a, **k: FakeLaC(V0))
   monkeypatch.setattr(controls_lateral_zp, "LatControlTorqueV2", lambda *a, **k: FakeLaC(V2))
+  monkeypatch.setattr(controls_lateral_zp, "LatControlTorqueV40", lambda *a, **k: FakeLaC(V40))
+  monkeypatch.setattr(controls_lateral_zp, "LatControlTorqueV42", lambda *a, **k: FakeLaC(V42))
   with OpenpilotPrefix():
     params = Params()
     params.put_bool("EnforceTorqueControl", True, block=True)  # the enforce-off tests flip it
-    CP = car.CarParams.new_message(steerControlType="torque")
+    CP = car.CarParams.new_message(steerControlType="torque", brand="mazda")
+    CP.flags = int(MazdaFlags.TORQUE_INTERCEPTOR)
     CP.lateralTuning.init('torque')
     controls = SimpleNamespace(params=params, CP=CP.as_reader(),
                                CP_SP=custom.CarParamsSP.new_message().as_reader(),
@@ -98,11 +104,29 @@ class TestTorqueTuneSelection:
     require_current_libparams(params, "TorqueControlTune")
     assert select(controls) == BY_VERSION[declared_default()]
 
-  @pytest.mark.parametrize(("version", "expected"), [(0.0, V0), (1.0, V1), (2.0, V2)])
+  @pytest.mark.parametrize(("version", "expected"), [(0.0, V0), (1.0, V1), (2.0, V2), (40.0, V40), (42.0, V42)])
   def test_explicit_version_is_honored(self, ctx, version, expected):
     params, controls = ctx
     params.put("TorqueControlTune", version, block=True)
     assert select(controls) == expected
+
+  @pytest.mark.parametrize("version", [40.0, 42.0])
+  def test_ti_version_requires_final_cp_eligibility(self, ctx, version):
+    params, controls = ctx
+    CP = car.CarParams.new_message(steerControlType="torque")
+    CP.lateralTuning.init("torque")
+    controls.CP = CP.as_reader()
+    params.put("TorqueControlTune", version, block=True)
+    assert select(controls) == V0
+
+  def test_missing_cp_ti_selection_falls_back_without_param_rewrite(self, ctx):
+    from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import resolved_tune_versions
+    params, _ = ctx
+    params.put("TorqueControlTune", 40.0, block=True)
+    params.put("TorqueControlTuneBig", 42.0, block=True)
+    assert resolved_tune_versions(params, CP=None) == {False: 0.0, True: 0.0}
+    assert params.get("TorqueControlTune") == 40.0
+    assert params.get("TorqueControlTuneBig") == 42.0
 
   def test_every_declared_version_is_wired(self, ctx):
     """The versions file is what the UI selectors and the sunnylink schema offer, while
@@ -110,7 +134,7 @@ class TestTorqueTuneSelection:
     but not wired here would surface in every selector and silently run v1."""
     from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import load_versions
 
-    wired = {0.0: V0, 1.0: V1, 2.0: V2}
+    wired = {0.0: V0, 1.0: V1, 2.0: V2, 40.0: V40, 42.0: V42}
     declared = {float(info["version"]) for info in load_versions().values()}
     assert declared == set(wired), "declared tune versions must match the wired controllers"
 
@@ -231,17 +255,19 @@ class TestTorqueTuneSelection:
     assert BY_VERSION[shown] == select(controls)
 
   @pytest.mark.parametrize(("small", "big", "enforce", "expected"), [
-    (2.0, 2.0, True, False), (2.0, 1.0, True, True), (0.0, 2.0, True, True), (2.0, 2.0, False, True)])
-  def test_jerk_aware_has_effect_unless_every_size_runs_v2(self, ctx, small, big, enforce, expected):
+    (2.0, 2.0, True, False), (2.0, 42.0, True, False), (42.0, 2.0, True, False), (42.0, 42.0, True, False),
+    (2.0, 1.0, True, True), (0.0, 2.0, True, True), (2.0, 2.0, False, True),
+    (40.0, 42.0, True, True), (42.0, 40.0, True, True), (1.0, 42.0, True, True), (40.0, 40.0, True, True)])
+  def test_jerk_aware_has_effect_unless_every_size_runs_v2_or_v42(self, ctx, small, big, enforce, expected):
     """v2 forces the jerk-aware controller off, so its toggle only locks when both sizes run
     v2; with Enforce Torque Control off both run v0."""
     from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import jerk_aware_has_effect
 
-    params, _ = ctx
+    params, controls = ctx
     params.put_bool("EnforceTorqueControl", enforce, block=True)
     params.put("TorqueControlTune", small, block=True)
     params.put("TorqueControlTuneBig", big, block=True)
-    assert jerk_aware_has_effect(params) is expected
+    assert jerk_aware_has_effect(params, controls.CP) is expected
 
 
 def _with_fingerprint(controls, fingerprint: str):
@@ -345,3 +371,51 @@ class TestTorqueTuneTiSeed:
     assert params.get("TorqueControlTune", return_default=True) == 2.0
     for key in controls_lateral_zp.TI_TUNE_SEEDS:
       assert params.get(key) is None, key
+
+
+class TestRealTorqueDispatch:
+  @staticmethod
+  def _controls(params, small, big, ti):
+    CP = car.CarParams.new_message(steerControlType="torque", carFingerprint="MAZDA_CX5",
+                                   brand="mazda", steerAtStandstill=True, steerLimitTimer=0.4)
+    if ti:
+      CP.flags = int(MazdaFlags.GEN1 | MazdaFlags.STEER_TO_ZERO | MazdaFlags.TORQUE_INTERCEPTOR)
+    CP.lateralTuning.init("torque")
+    CP.lateralTuning.torque.latAccelFactor = 2.5
+    params.put_bool("EnforceTorqueControl", True, block=True)
+    params.put("TorqueControlTune", small, block=True)
+    params.put("TorqueControlTuneBig", big, block=True)
+    return SimpleNamespace(params=params, CP=CP.as_reader(), CP_SP=custom.CarParamsSP.new_message().as_reader(),
+                           _inactive_frames=TUNE_SWAP_INACTIVE_FRAMES)
+
+  @staticmethod
+  def _version(lac):
+    from openpilot.sunnypilot.selfdrive.controls.tests.test_latcontrol_torque_v42 import LAT_DELAY, LP, VM, make_cs
+    return lac.update(True, make_cs(), VM, LP, False, 0.001, None, False, LAT_DELAY)[2].version
+
+  def test_real_ti_dispatch_and_baseline_constructor(self):
+    from openpilot.sunnypilot.selfdrive.controls.tests.test_latcontrol_torque_v42 import make_ci
+    with OpenpilotPrefix():
+      params = Params()
+      def build(controls):
+        controls.LaC = ControlsLateralZP.initialize_lateral_control(controls, FakeLaC(V1), make_ci(), 0.01)
+        return controls.LaC
+      controls = self._controls(params, 40.0, 42.0, True)
+      build(controls)
+      assert type(controls.LaC).__module__.endswith("latcontrol_torque_v40")
+      assert type(controls._lac_by_size[True]).__module__.endswith("latcontrol_torque_v42")
+      assert self._version(controls.LaC) == 40
+      assert self._version(controls._lac_by_size[True]) == 42
+
+      controls = self._controls(params, 2.0, 2.0, True)
+      build(controls)
+      assert type(controls.LaC).__module__.endswith("latcontrol_torque_v2")
+      assert self._version(controls.LaC) == 2
+
+      controls = self._controls(params, 40.0, 42.0, False)
+      build(controls)
+      assert type(controls.LaC).__module__.endswith("latcontrol_torque_v0")
+      assert controls._lac_by_size[False] is controls._lac_by_size[True]
+      assert self._version(controls.LaC) == 0
+      assert params.get("TorqueControlTune") == 40.0
+      assert params.get("TorqueControlTuneBig") == 42.0

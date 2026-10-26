@@ -13,11 +13,14 @@ from enum import IntEnum
 import math
 import os
 
+from opendbc.car.mazda.values import MazdaFlags
+
 TORQUE_VERSIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "latcontrol_torque_versions.json")
 
 # one tune per model size, keyed by modelV2.big
 TUNE_PARAM_BY_SIZE = {False: "TorqueControlTune", True: "TorqueControlTuneBig"}
 V2 = 2.0
+V42 = 42.0
 
 
 def load_versions() -> dict:
@@ -42,7 +45,9 @@ def versions_by_label() -> dict[str, float]:
   return dict(sorted(versions.items(), key=lambda kv: kv[1]))
 
 
-def label_for(version: float, versions: dict[str, float]) -> str | None:
+def label_for(version: float | None, versions: dict[str, float]) -> str | None:
+  if version is None:
+    return None
   for label, v in versions.items():
     if math.isclose(v, version, rel_tol=1e-5):
       return label
@@ -55,14 +60,22 @@ def stored_tune_versions(params) -> dict[bool, float]:
   return {big: float(params.get(key, return_default=True)) for big, key in TUNE_PARAM_BY_SIZE.items()}
 
 
-def resolved_tune_versions(params, torque_lateral_tuning: bool = True) -> dict[bool, float | None]:
+def ti_tune_eligible(CP) -> bool:
+  return bool(CP is not None and CP.brand == "mazda" and CP.flags & MazdaFlags.TORQUE_INTERCEPTOR
+              and CP.lateralTuning.which() == "torque")
+
+
+def resolved_tune_versions(params, torque_lateral_tuning: bool = True, CP=None) -> dict[bool, float | None]:
   """The tune version the controller will actually run per model size, or None for the
   upstream controller. With EnforceTorqueControl off, torque-tuned cars run v0 regardless
   of the stored tune (FIXME-SP: revert when upstream fixes tuning issues with v1), and
   non-torque cars run the upstream controller."""
   if not params.get_bool("EnforceTorqueControl"):
     return dict.fromkeys(TUNE_PARAM_BY_SIZE, 0.0 if torque_lateral_tuning else None)
-  return stored_tune_versions(params)
+  versions: dict[bool, float | None] = stored_tune_versions(params)
+  if CP is None or not ti_tune_eligible(CP):
+    versions = {big: 0.0 if version in (40.0, 42.0) else version for big, version in versions.items()}
+  return versions
 
 
 class MazdaTorqueV2Mode(IntEnum):
@@ -75,9 +88,8 @@ def mazda_v2_ab_available(params, CP) -> bool:
     CP is not None
     and CP.carFingerprint == "MAZDA_CX5"
     and CP.steerAtStandstill
-    and params.get_bool("TorqueInterceptorEnabled")
-    and CP.lateralTuning.which() == "torque"
-    and resolved_tune_versions(params, True).get(False) == V2
+    and ti_tune_eligible(CP)
+    and any(version == V42 for version in resolved_tune_versions(params, True, CP).values())
   )
 
 
@@ -90,7 +102,7 @@ def resolved_mazda_v2_mode(params, CP) -> MazdaTorqueV2Mode:
     return MazdaTorqueV2Mode.A
 
 
-def jerk_aware_has_effect(params) -> bool:
+def jerk_aware_has_effect(params, CP=None) -> bool:
   """v2 replaces the jerk-aware mechanisms and forces that controller off, so the toggle
   only does something while some model size runs another tune."""
-  return any(version != V2 for version in resolved_tune_versions(params).values())
+  return any(version not in (V2, V42) for version in resolved_tune_versions(params, CP=CP).values())
