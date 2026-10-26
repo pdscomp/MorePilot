@@ -11,7 +11,7 @@ OLD expected traces live in mazda_actuator_units_old_traces.json, generated from
 untouched zoom-more worktree (OLD = 40785dfd67f048f439100fbfd6608114760aca89) in an isolated
 process; mazda_actuator_trace.py's docstring has the exact regeneration command. Both sides
 run the same driver — real get_car with mocked CAN I/O, both setup layers, repeated CP-aware
-retune calls, the real LatControlTorque v0 stack, and the real CarController — so a diff here
+retune calls, V40 for TI scenarios and baseline V0 otherwise, and the real CarController — so a diff here
 is a behavior change, never a harness reimplementation.
 """
 
@@ -56,6 +56,19 @@ def _diffs(cand, old, path=''):
       yield from _diffs(c, o, f"{path}[{i}]")
   elif cand != old:
     yield path, old, cand
+
+
+def _without_report_fields(value):
+  if isinstance(value, dict):
+    return {k: _without_report_fields(v) for k, v in value.items() if k not in ('rep_counts', 'rep_torque')}
+  if isinstance(value, list):
+    return [_without_report_fields(v) for v in value]
+  return value
+
+
+def _assert_owner_report(record):
+  assert record['rep_counts'] == record['ti']
+  assert np.float32(record['rep_torque']) == np.float32(record['ti'] / 600.0)
 
 
 def assert_same(cand, old, label):
@@ -105,7 +118,13 @@ class TestTiKeepsOldUnits:
     counts they produce are integer-identical."""
     name = 'swapped_cx5_ti_manual_nnlc'
     cand, old = traces[name], OLD_TRACES[name]
-    assert_ti_trace_equal(cand, old, ('override_written', 'nnlc_scale', 'lac_driven', 'wire_scripted'), name)
+    assert_ti_trace_equal(cand, old, ('override_written', 'nnlc_scale'), name)
+    assert_same(_without_report_fields({k: cand[k] for k in ('lac_driven', 'wire_scripted')}),
+                _without_report_fields({k: old[k] for k in ('lac_driven', 'wire_scripted')}), name)
+    for record in cand['lac_driven'].values():
+      _assert_owner_report(record)
+    for record in cand['wire_scripted'].values():
+      _assert_owner_report(record)
     # the driver's explicit override values land unscaled on TI
     assert cand['override_written']['laf'] == np.float32(1.9)
     assert cand['override_written']['friction'] == np.float32(0.12)
@@ -133,20 +152,31 @@ class TestTiKeepsOldUnits:
     """Learned (and seed-fallback) bins drive the same counts as OLD at every swept speed,
     including the stepped companion scale's 14.2/14.5 m/s cliff: bins are normalized units
     learned under one scale each, and OLD interpolated them in per-count space."""
-    for name in ('cx5_2022_ti', 'swapped_cx5_ti_learned'):
+    for name in ('cx5_2022_ti',):
       assert_same(traces[name]['learned'], OLD_TRACES[name]['learned'], f"{name}.learned")
+    name = 'swapped_cx5_ti_learned'
+    assert_same(_without_report_fields(traces[name]['learned']),
+                _without_report_fields(OLD_TRACES[name]['learned']), f"{name}.learned")
+    for records in traces[name]['learned'].values():
+      for record in records.values():
+        _assert_owner_report(record)
 
-  def test_ti_companion_reporting_keeps_old_meaning(self, traces):
-    """Every scripted (vEgo, demand) point: 0x249 counts, companion 0x243 bytes, and the
-    reported actuators are integer/byte/float-exact against OLD — and the report still means
-    the native companion command (apply_torque over the companion scale), not TI feedback."""
+  def test_ti_reporting_tracks_selected_actuator(self, traces):
+    """Scripted CAN bytes stay exact; only the owner cohort's report changes to TI/600."""
+    owner = {'swapped_cx5_ti', 'swapped_cx5_ti_manual_nnlc'}
     for name in ('swapped_cx5_ti', 'swapped_cx5_ti_manual_nnlc', 'cx5_2022_ti', 'cx9_2021_legacy_ti', 'cx8_2022_ti'):
-      assert_same(traces[name]['wire_scripted'], OLD_TRACES[name]['wire_scripted'], f"{name}.wire_scripted")
-      for (v, _d), r in traces[name]['wire_scripted'].items():
+      cand, old = traces[name]['wire_scripted'], OLD_TRACES[name]['wire_scripted']
+      if name in owner:
+        assert_same(_without_report_fields(cand), _without_report_fields(old), f"{name}.wire_scripted")
+        for record in cand.values():
+          _assert_owner_report(record)
+      else:
+        assert_same(cand, old, f"{name}.wire_scripted")
+      for (v, _d), r in cand.items():
         assert r['ti'] is not None, f"{name} {v}: TI car must send 0x249"
-        assert r['rep_counts'] == r['cam'], f"{name} {v}: torqueOutputCan is the 0x243 command"
-        # actuators.torque is a capnp Float32: compare against the float32-rounded division
-        assert r['rep_torque'] == np.float32(r['cam'] / companion_steer_max(name, v)), f"{name} {v}: reported torque is normalized on the companion scale"
+        if name not in owner:
+          assert r['rep_counts'] == r['cam'], f"{name} {v}: torqueOutputCan is the 0x243 command"
+          assert r['rep_torque'] == np.float32(r['cam'] / companion_steer_max(name, v)), f"{name} {v}: reported torque is normalized on the companion scale"
     # standstill-zero boundary: the TI wire zeroes below 1.0 m/s, the companion never does
     swapped = traces['swapped_cx5_ti']['wire_scripted']
     assert swapped[(0.0, 0.95)]['ti'] == swapped[(0.99, 0.95)]['ti'] == 0

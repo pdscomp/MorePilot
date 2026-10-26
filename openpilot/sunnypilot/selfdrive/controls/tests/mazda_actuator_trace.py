@@ -6,8 +6,8 @@ repeated CP-aware retune calls, then records: tune values, semantic flags, contr
 params, speed-dep tables, scale consumers, and integer wire counts — CAM_LKAS 0x243 companion
 and CAM_LKAS2 0x249 TI — across the contract's vEgo sweep.
 
-Every number comes from the tree's own get_car / CarInterface / LatControlTorque (v0, the
-file is tree-identical) / CarController; nothing here reimplements controller logic. The
+Every number comes from the tree's own get_car / CarInterface / V40 for TI scenarios
+(and baseline V0 otherwise) / CarController; nothing here reimplements controller logic. The
 lateral loop's demand generation uses the toy VM from test_latcontrol_torque_v2.py; the
 carcontroller CS uses the SimpleNamespace pattern from opendbc's mazda controller tests.
 
@@ -34,6 +34,7 @@ from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.car import interfaces as sp_car_interfaces
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import LatControlTorque as LatControlTorqueV0
+from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v40 import LatControlTorque as LatControlTorqueV40
 from openpilot.sunnypilot.selfdrive.locationd.speed_bin_learner import LIVE_TORQUE_PARAMETERS_SP_SERVICE
 
 # Contract-B sweep: the TI standstill-zero boundary (0.99/1.0), seed bin centers (6.5, 9.5,
@@ -141,6 +142,7 @@ def _controller_state(v, driver_torque=0.0):
     out=out,
     update_mads_feedback=lambda CC, CC_SP: None,  # MadsCarController wiring in the target's update
     ti_lkas_allowed=True,  # healthy TI feedback: RUN state, fresh
+    ti_lkas_rejected=0,
     lkas_rejected=0,
     steer_undelivered=False,
     steer_first_engage_hold=False,
@@ -218,7 +220,8 @@ def _model_v2():
 
 
 def _make_lac(CI, nnlc_live):
-  lac = LatControlTorqueV0(CI.CP.as_reader(), CI.CP_SP, CI, DT_CTRL)
+  controller = LatControlTorqueV40 if CI.CP.flags & MazdaFlags.TORQUE_INTERCEPTOR else LatControlTorqueV0
+  lac = controller(CI.CP.as_reader(), CI.CP_SP, CI, DT_CTRL)
   if nnlc_live:
     lac.extension.update_model_v2(_model_v2())
   return lac
