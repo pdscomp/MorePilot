@@ -10,7 +10,7 @@ import pytest
 
 from openpilot.cereal import log
 from openpilot.sunnypilot.common import ignition
-from openpilot.sunnypilot.common.ignition import get_ignition_state, IGNITION_CAN_DROP_HOLD_S
+from openpilot.sunnypilot.common.ignition import get_ignition_state
 
 PandaType = log.PandaState.PandaType
 
@@ -21,58 +21,47 @@ def ps(can=False, line=False, panda_type=PandaType.tres):
 
 @pytest.fixture(autouse=True)
 def _fresh_state():
-  ignition._ignition_can_last_seen = None
+  ignition._ignition_can_seen = False
   yield
-  ignition._ignition_can_last_seen = None
+  ignition._ignition_can_seen = False
 
 
 class TestIgnition:
   def test_can_on(self):
-    assert get_ignition_state([ps(can=True)], now=0.0)
-    assert get_ignition_state([ps(can=True, line=True)], now=1.0)
+    assert get_ignition_state([ps(can=True)])
+    assert get_ignition_state([ps(can=True, line=True)])
 
-  def test_can_drop_with_line_high_holds_then_releases(self):
-    assert get_ignition_state([ps(can=True, line=True)], now=10.0)
-    for dt in (0.0, 1.0, IGNITION_CAN_DROP_HOLD_S - 0.1):
-      assert get_ignition_state([ps(can=False, line=True)], now=10.0 + dt)
-    assert not get_ignition_state([ps(can=False, line=True)], now=10.0 + IGNITION_CAN_DROP_HOLD_S)
-    # Mazda: line stays high ~30 s after key-off, it must not bring ignition back
-    assert not get_ignition_state([ps(can=False, line=True)], now=35.0)
+  def test_can_drop_with_line_high_is_off_immediately(self):
+    assert get_ignition_state([ps(can=True, line=True)])
+    assert not get_ignition_state([ps(can=False, line=True)])
+    # Mazda's slow line must not resurrect ignition later either.
+    assert not get_ignition_state([ps(can=False, line=True)])
 
   def test_can_drop_with_line_low_is_off_immediately(self):
-    assert get_ignition_state([ps(can=True, line=True)], now=10.0)
-    assert not get_ignition_state([ps(can=False, line=False)], now=10.0)
+    assert get_ignition_state([ps(can=True, line=True)])
+    assert not get_ignition_state([ps(can=False, line=False)])
 
   def test_line_only_car_follows_the_line(self):
-    assert get_ignition_state([ps(line=True)], now=0.0)
-    assert get_ignition_state([ps(line=True)], now=100.0)
-    assert not get_ignition_state([ps(line=False)], now=101.0)
-    assert get_ignition_state([ps(line=True)], now=102.0)
+    assert get_ignition_state([ps(line=True)])
+    assert not get_ignition_state([ps(line=False)])
+    assert get_ignition_state([ps(line=True)])
+    assert not get_ignition_state([ps(line=True, panda_type=PandaType.unknown)])
+    assert get_ignition_state([ps(line=True)])
 
-  def test_no_valid_panda_is_off_and_resets(self):
-    assert get_ignition_state([ps(can=True, line=True)], now=0.0)
-    assert not get_ignition_state([ps(can=True, line=True, panda_type=PandaType.unknown)], now=0.5)
-    assert not get_ignition_state([], now=0.6)
-    assert ignition._ignition_can_last_seen is None
-    # back to line-only semantics until CAN is seen again
-    assert get_ignition_state([ps(line=True)], now=1.0)
+  def test_no_valid_panda_preserves_can_priority(self):
+    assert get_ignition_state([ps(can=True, line=True)])
+    assert not get_ignition_state([ps(can=True, line=True, panda_type=PandaType.unknown)])
+    assert not get_ignition_state([])
+    # Do not reset to line-only semantics after CAN ownership was established.
+    assert not get_ignition_state([ps(line=True)])
 
-  def test_can_recovery_inside_hold_window_restarts_it(self):
-    assert get_ignition_state([ps(can=True, line=True)], now=0.0)
-    assert get_ignition_state([ps(can=False, line=True)], now=3.0)
-    assert get_ignition_state([ps(can=True, line=True)], now=4.0)
-    # a new drop measures from the recovery, not the first drop
-    assert get_ignition_state([ps(can=False, line=True)], now=4.0 + IGNITION_CAN_DROP_HOLD_S - 0.1)
-    assert not get_ignition_state([ps(can=False, line=True)], now=4.0 + IGNITION_CAN_DROP_HOLD_S)
+  def test_can_recovery_reasserts_ignition(self):
+    assert get_ignition_state([ps(can=True, line=True)])
+    assert not get_ignition_state([ps(can=False, line=True)])
+    assert get_ignition_state([ps(can=True, line=True)])
 
   def test_any_panda_counts(self):
     states = [ps(can=False, line=False), ps(can=True, line=False)]
-    assert get_ignition_state(states, now=0.0)
+    assert get_ignition_state(states)
     states = [ps(can=False, line=True), ps(can=False, line=False)]
-    assert get_ignition_state(states, now=2.0)
-    assert not get_ignition_state(states, now=2.0 + IGNITION_CAN_DROP_HOLD_S)
-
-  def test_default_clock(self):
-    # the callers pass nothing; the monotonic default must work
-    assert get_ignition_state([ps(can=True)])
-    assert get_ignition_state([ps(line=True)])
+    assert not get_ignition_state(states)
