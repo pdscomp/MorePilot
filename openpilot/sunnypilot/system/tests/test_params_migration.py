@@ -457,7 +457,7 @@ class TestMazdaControlCacheMigration(OpenpilotTestCase):
     """The manager_init sequence without registration: transient CP keys are cleared before
     migrations, so the migration never archives them, and seeding finds no old-layout CP."""
     from opendbc.car.mazda.values import CAR
-    from openpilot.sunnypilot.selfdrive.car.interfaces import seed_car_defaults_offroad
+    from openpilot.sunnypilot.selfdrive.car.mazda_torque_seed import seed_car_defaults_offroad
     params = Params()
     CP = _mazda_cp(CAR.MAZDA_CX5, V1_GEN1 | V1_LEGACY)
     old_bytes = CP.to_bytes()
@@ -495,4 +495,104 @@ class TestMazdaControlCacheMigration(OpenpilotTestCase):
 
     assert params.get("OnroadScreenOffBrightnessMigrated") is None
     assert params.get("CarParamsPersistent") is not None  # destructive phase never started
+
+
+class TestTiReportPreparation(OpenpilotTestCase):
+  def test_owner_report_transition_retires_learning_once(self):
+    from opendbc.car.mazda.values import CAR, MazdaFlags
+    p = Params()
+    cp = _mazda_cp(CAR.MAZDA_CX5, int(MazdaFlags.GEN1 | MazdaFlags.STEER_TO_ZERO_EPS
+                                     | MazdaFlags.TORQUE_INTERCEPTOR), min_steer_speed=0.0)
+    p.put("CarParamsPersistent", cp.to_bytes(), block=True)
+    p.put("CarParamsPrevRoute", cp.to_bytes(), block=True)
+    p.put("CarParamsSPPersistent", _mazda_cp_sp_bytes(cp, CAR.MAZDA_CX5), block=True)
+    old = {"LiveTorqueParameters": _ltp_cache_bytes(),
+           "LiveTorqueParametersSP": _sp_cache_bytes([6.5, 10.0])}
+    for key, value in old.items():
+      p.put(key, value, block=True)
+    stamp_mazda_control_cache_contract(p, cp)
+    contract = _read_contract(p)
+    contract.pop("torque_report", None)
+    params_migration._atomic_write_json(_contract_path(p), contract)
+
+    params_migration.prepare_ti_actuator_report_cache(p, cp)
+    for key in old:
+      assert p.get(key) is None
+      archived = _read_archive(p)["generations"][-1]["keys"][key]
+      assert base64.b64decode(archived["data"]) == old[key]
+    assert p.get("CarParamsPersistent") == cp.to_bytes()
+    assert _read_contract(p).get("torque_report") is None
+    stamp_mazda_control_cache_contract(p, cp)
+    assert _read_contract(p)["torque_report"] == "donor-cx5-ti-0x249-v1"
+    count = len(_read_archive(p)["generations"])
+    for key, value in old.items():
+      p.put(key, value, block=True)
+    params_migration.prepare_ti_actuator_report_cache(p, cp)
+    assert {key: p.get(key) for key in old} == old
+    assert len(_read_archive(p)["generations"]) == count
+
+    contract = _read_contract(p)
+    contract.pop("torque_report")
+    params_migration._atomic_write_json(_contract_path(p), contract)
+    params_migration.prepare_ti_actuator_report_cache(p, cp)
+    assert all(p.get(key) is None for key in old)
+
+  def test_nonpilot_is_not_migrated(self):
+    from opendbc.car.mazda.values import CAR, MazdaFlags
+    p = Params()
+    cp = _mazda_cp(CAR.MAZDA_CX5_2022, int(MazdaFlags.GEN1 | MazdaFlags.STEER_TO_ZERO_EPS
+                                          | MazdaFlags.TORQUE_INTERCEPTOR), min_steer_speed=0.0)
+    value = _ltp_cache_bytes()
+    p.put("LiveTorqueParameters", value, block=True)
+    params_migration.prepare_ti_actuator_report_cache(p, cp)
+    assert p.get("LiveTorqueParameters") == value
+    assert not _archive_path(p).exists()
+
+  def test_non_mazda_does_not_clear_previous_ti_epoch(self):
+    from opendbc.car.mazda.values import CAR, MazdaFlags
+    p = Params()
+    owner = _mazda_cp(CAR.MAZDA_CX5, int(MazdaFlags.GEN1 | MazdaFlags.STEER_TO_ZERO_EPS
+                                        | MazdaFlags.TORQUE_INTERCEPTOR), min_steer_speed=0.0)
+    p.put("CarParamsPersistent", owner.to_bytes(), block=True)
+    stamp_mazda_control_cache_contract(p, owner)
+    old = {"LiveTorqueParameters": _ltp_cache_bytes(),
+           "LiveTorqueParametersSP": _sp_cache_bytes([6.5, 10.0])}
+    for key, value in old.items():
+      p.put(key, value, block=True)
+    toyota = _mazda_cp(CAR.MAZDA_CX5, 0)
+    toyota.brand = "toyota"
+    toyota.carFingerprint = "TOYOTA_COROLLA"
+    params_migration.prepare_ti_actuator_report_cache(p, toyota)
+    assert {key: p.get(key) for key in old} == old
+    assert not _archive_path(p).exists()
+
+  def test_companion_transition_retires_ti_learning_once(self):
+    from opendbc.car.mazda.values import CAR, MazdaFlags
+    p = Params()
+    owner = _mazda_cp(CAR.MAZDA_CX5, int(MazdaFlags.GEN1 | MazdaFlags.STEER_TO_ZERO_EPS
+                                        | MazdaFlags.TORQUE_INTERCEPTOR), min_steer_speed=0.0)
+    p.put("CarParamsPersistent", owner.to_bytes(), block=True)
+    stamp_mazda_control_cache_contract(p, owner)
+    old = {"LiveTorqueParameters": _ltp_cache_bytes(),
+           "LiveTorqueParametersSP": _sp_cache_bytes([6.5, 10.0])}
+    for key, value in old.items():
+      p.put(key, value, block=True)
+
+    companion = _mazda_cp(CAR.MAZDA_CX5, int(MazdaFlags.GEN1 | MazdaFlags.STEER_TO_ZERO_EPS),
+                          min_steer_speed=0.0)
+    params_migration.prepare_ti_actuator_report_cache(p, companion)
+    for key in old:
+      assert p.get(key) is None
+      archived = _read_archive(p)["generations"][-1]["keys"][key]
+      assert base64.b64decode(archived["data"]) == old[key]
+    p.put("CarParamsPersistent", companion.to_bytes(), block=True)
+    stamp_mazda_control_cache_contract(p, companion)
+    assert "torque_report" not in _read_contract(p)
+
+    count = len(_read_archive(p)["generations"])
+    for key, value in old.items():
+      p.put(key, value, block=True)
+    params_migration.prepare_ti_actuator_report_cache(p, companion)
+    assert {key: p.get(key) for key in old} == old
+    assert len(_read_archive(p)["generations"]) == count
 

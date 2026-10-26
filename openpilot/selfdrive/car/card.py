@@ -27,7 +27,7 @@ from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_ca
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
 from openpilot.sunnypilot.selfdrive.car.card_ext import CardExt
 from openpilot.sunnypilot.selfdrive.car.alpha_long_toggle import AlphaLongToggleMonitor
-from openpilot.sunnypilot.system.params_migration import stamp_mazda_control_cache_contract
+from openpilot.sunnypilot.system.params_migration import prepare_ti_actuator_report_cache, stamp_mazda_control_cache_contract
 
 REPLAY = "REPLAY" in os.environ
 
@@ -168,6 +168,8 @@ class Car:
             self.CI.CC.secoc_key = saved_secoc_key
         else:
           cloudlog.warning("Saved SecOC key is invalid")
+
+    prepare_ti_actuator_report_cache(self.params, self.CP)
 
     # Write previous route's CarParams
     prev_cp = self.params.get("CarParamsPersistent")

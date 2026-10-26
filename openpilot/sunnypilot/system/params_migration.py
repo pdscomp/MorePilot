@@ -124,6 +124,7 @@ MAZDA_CACHE_LAYOUT_V1 = "mazda-flags-v1"
 MAZDA_CACHE_LAYOUT_V2 = "mazda-flags-v2"
 MAZDA_CACHE_PROFILE_NATIVE = "native-v2"
 MAZDA_CACHE_PROFILE_TI_LEGACY = "ti-legacy-v1"
+_MAZDA_TI_REPORT_EPOCH = "donor-cx5-ti-0x249-v1"
 
 _MAZDA_CONTRACT_FILE = ".mazda_control_cache_contract.json"
 _MAZDA_ARCHIVE_FILE = ".mazda_control_cache_archive.json"
@@ -178,10 +179,14 @@ def _blob_record(data: bytes | None, layout: str | None) -> dict:
   return {"sha256": None if data is None else _sha256(data), "layout": None if data is None else layout}
 
 
-def _write_mazda_cache_contract(meta_dir: Path, params, profile: str | None, prev_layout: str | None) -> None:
+def _write_mazda_cache_contract(meta_dir: Path, params, profile: str | None,
+                                prev_layout: str | None, torque_report: str | None = None) -> None:
   blobs = {key: _blob_record(params.get(key), MAZDA_CACHE_LAYOUT_V2) for key in _MAZDA_PERSISTENT_CP_KEYS}
   blobs["CarParamsPrevRoute"] = _blob_record(params.get("CarParamsPrevRoute"), prev_layout)
-  _atomic_write_json(meta_dir / _MAZDA_CONTRACT_FILE, {"version": 2, "profile": profile, "blobs": blobs})
+  contract = {"version": 2, "profile": profile, "blobs": blobs}
+  if torque_report is not None:
+    contract["torque_report"] = torque_report
+  _atomic_write_json(meta_dir / _MAZDA_CONTRACT_FILE, contract)
 
 
 def _mazda_contract_matches(contract, params) -> bool:
@@ -392,6 +397,28 @@ def migrate_mazda_control_cache(params) -> None:
   _write_mazda_cache_contract(meta_dir, params, profile, prev_layout)
 
 
+def prepare_ti_actuator_report_cache(params, CP) -> None:
+  if CP.brand != "mazda":
+    return
+  from opendbc.sunnypilot.car.lateral_tune import uses_ti_actuator_units
+  meta_dir = _mazda_meta_dir(params)
+  contract = _read_json_file(meta_dir / _MAZDA_CONTRACT_FILE)
+  previous_report = contract.get("torque_report") if isinstance(contract, dict) else None
+  ti_units = uses_ti_actuator_units(CP)
+  # Learning is valid only in the units that produced it. Migrate on either edge of the
+  # donor-CX5 TI/600 report boundary, not just when entering TI mode.
+  if not ti_units and previous_report != _MAZDA_TI_REPORT_EPOCH:
+    return
+  if (ti_units and previous_report == _MAZDA_TI_REPORT_EPOCH
+      and _mazda_contract_matches(contract, params)):
+    return
+  _archive_mazda_control_cache(meta_dir, params, "Mazda actuator report units changed")
+  for key in _MAZDA_TORQUE_CACHE_KEYS:
+    params.remove(key)
+    if params.get(key) is not None:
+      raise RuntimeError(f"params_migration: failed to remove {key}")
+
+
 def stamp_mazda_control_cache_contract(params, CP) -> None:
   """card seam: stamp the contract after the persistent CP/SP writes and the PrevRoute advance,
   last before other consumers. A crash or an old-branch card before this stamp leaves the
@@ -413,7 +440,9 @@ def stamp_mazda_control_cache_contract(params, CP) -> None:
     if record.get("layout") == MAZDA_CACHE_LAYOUT_V1 and record.get("sha256") == _sha256(prev):
       prev_layout = MAZDA_CACHE_LAYOUT_V1
   profile = MAZDA_CACHE_PROFILE_TI_LEGACY if CP.flags & MazdaFlags.TORQUE_INTERCEPTOR else MAZDA_CACHE_PROFILE_NATIVE
-  _write_mazda_cache_contract(meta_dir, params, profile, prev_layout)
+  from opendbc.sunnypilot.car.lateral_tune import uses_ti_actuator_units
+  report = _MAZDA_TI_REPORT_EPOCH if uses_ti_actuator_units(CP) else None
+  _write_mazda_cache_contract(meta_dir, params, profile, prev_layout, torque_report=report)
 
 
 def run_migration(_params):
