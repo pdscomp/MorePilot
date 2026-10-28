@@ -156,6 +156,7 @@ def get_center_chatter_jerk_deadzone(v_ego, setpoint):
 
 
 class LatControlTorque(LatControlTorqueV40):
+  VERSION = VERSION
   # v0's __init__ calls update_limits() before this subclass's __init__ has run (and once
   # before the extension exists), so everything the override reads needs a class-level
   # default rather than a per-call guard.
@@ -200,7 +201,7 @@ class LatControlTorque(LatControlTorqueV40):
     # friction shaping and integrator policy while the setpoint changes still flow through.
     # Disable them regardless of the params; NNLC is already excluded structurally (enabling
     # it disables EnforceTorqueControl, which forces v0) — this covers the params disagreeing.
-    cloudlog.info("LatControlTorque v42: extension output overrides (jerk-aware/NNLC) disabled")
+    cloudlog.info("LatControlTorque v%d: extension output overrides (jerk-aware/NNLC) disabled", self.VERSION)
     self.extension.disable_output_overrides()
     self.update_limits()  # an override controller may have retuned the shared PID to torque-space limits
 
@@ -271,7 +272,7 @@ class LatControlTorque(LatControlTorqueV40):
       self.update_limits()
 
     pid_log = log.ControlsState.LateralTorqueState.new_message()
-    pid_log.version = VERSION
+    pid_log.version = self.VERSION
 
     measured_curvature = -VM.calc_curvature(math.radians(CS.steeringAngleDeg - params.angleOffsetDeg), CS.vEgo, params.roll)
     measurement = measured_curvature * CS.vEgo ** 2
@@ -402,8 +403,10 @@ class LatControlTorque(LatControlTorqueV40):
         output_torque = 0.0
       else:
         # Driver wheel motion must not generate an opposing derivative command.
+        error_rate = 0.0 if CS.steeringPressed else -measurement_rate
+        pid_log.errorRate = float(error_rate)
         output_lataccel = self.pid.update(pid_log.error,
-                                         0.0 if CS.steeringPressed else -measurement_rate,
+                                         error_rate,
                                           feedforward=ff,
                                           speed=CS.vEgo,
                                           freeze_integrator=freeze_integrator)

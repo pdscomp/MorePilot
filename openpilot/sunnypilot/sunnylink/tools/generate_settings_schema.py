@@ -14,7 +14,7 @@ import json
 import os
 from collections.abc import Callable
 
-from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import TORQUE_VERSIONS_PATH, TUNE_PARAM_BY_SIZE
+from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import TI_TUNE_VERSIONS, TORQUE_VERSIONS_PATH, TUNE_PARAM_BY_SIZE
 from openpilot.sunnypilot.sunnylink.capabilities import CAPABILITY_FIELDS, CAPABILITY_LABELS
 
 SCHEMA_VERSION = "1.0"
@@ -44,7 +44,7 @@ def _build_torque_options(versions: dict) -> list[dict]:
       continue
   for version, label in sorted(parsed, key=lambda kv: kv[0], reverse=True):
     option = {"value": version, "label": label}
-    if version in (40.0, 42.0):
+    if version in TI_TUNE_VERSIONS:
       option["enablement"] = [{"type": "capability", "field": "mazda_ti_tunes_available", "equals": True}]
     options.append(option)
   return options

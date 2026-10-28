@@ -63,7 +63,7 @@ def make_lac(cls, friction=0.0, **kwargs):
   return cls(make_cp(friction=friction), custom.CarParamsSP.new_message().as_reader(), make_ci(), DT, **kwargs)
 
 
-def make_mazda_ti_lac(mode, fingerprint="MAZDA_CX5", flags=MAZDA_TI_FLAGS):
+def make_mazda_ti_lac(mode, fingerprint="MAZDA_CX5", flags=MAZDA_TI_FLAGS, cls=LatControlTorqueV2):
   CP = car.CarParams.new_message(
     steerControlType="torque",
     steerLimitTimer=0.4,
@@ -74,7 +74,7 @@ def make_mazda_ti_lac(mode, fingerprint="MAZDA_CX5", flags=MAZDA_TI_FLAGS):
   )
   CP.lateralTuning.init("torque")
   CP.lateralTuning.torque.latAccelFactor = LAF
-  return LatControlTorqueV2(
+  return cls(
     CP.as_reader(), custom.CarParamsSP.new_message().as_reader(), make_ci(), DT,
     mazda_v2_mode=mode,
   )
@@ -864,3 +864,9 @@ def test_driver_override_damping_gate(params, pressed):
   # Release resumes damping using continuously maintained measurement history.
   released = step(lac, make_cs(v_ego=10.0, lat_accel=0.6, pressed=False), 0.0)
   assert released.d != 0.0
+  assert released.d == pytest.approx(lac.pid.k_d * released.errorRate, rel=1e-6)
+  if pressed:
+    assert result.errorRate == 0.0
+  else:
+    assert result.d == pytest.approx(lac.pid.k_d * result.errorRate, rel=1e-6)
+  assert step(lac, make_cs(10.0), 0.0, active=False).errorRate == 0.0

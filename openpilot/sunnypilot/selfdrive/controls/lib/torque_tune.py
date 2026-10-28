@@ -21,6 +21,8 @@ TORQUE_VERSIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 TUNE_PARAM_BY_SIZE = {False: "TorqueControlTune", True: "TorqueControlTuneBig"}
 V2 = 2.0
 V42 = 42.0
+V43 = 43.0
+TI_TUNE_VERSIONS = (40.0, V42, V43)
 
 
 def load_versions() -> dict:
@@ -74,7 +76,7 @@ def resolved_tune_versions(params, torque_lateral_tuning: bool = True, CP=None) 
     return dict.fromkeys(TUNE_PARAM_BY_SIZE, 0.0 if torque_lateral_tuning else None)
   versions: dict[bool, float | None] = stored_tune_versions(params)
   if CP is None or not ti_tune_eligible(CP):
-    versions = {big: 0.0 if version in (40.0, 42.0) else version for big, version in versions.items()}
+    versions = {big: 0.0 if version in TI_TUNE_VERSIONS else version for big, version in versions.items()}
   return versions
 
 
@@ -105,4 +107,4 @@ def resolved_mazda_v2_mode(params, CP) -> MazdaTorqueV2Mode:
 def jerk_aware_has_effect(params, CP=None) -> bool:
   """v2 replaces the jerk-aware mechanisms and forces that controller off, so the toggle
   only does something while some model size runs another tune."""
-  return any(version not in (V2, V42) for version in resolved_tune_versions(params, CP=CP).values())
+  return any(version not in (V2, V42, V43) for version in resolved_tune_versions(params, CP=CP).values())

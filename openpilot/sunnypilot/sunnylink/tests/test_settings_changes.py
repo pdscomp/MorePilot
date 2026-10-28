@@ -234,7 +234,7 @@ class TestTiTuneOptionAvailability(OpenpilotTestCase):
       item = _find_item(schema, key)
       for option in item["options"]:
         version = float(option["value"])
-        assert option.get("enablement") == (expected if version in (40.0, 42.0) else None)
+        assert option.get("enablement") == (expected if version in (40.0, 42.0, 43.0) else None)
     assert "mazda_ti_tunes_available" in schema["capability_fields"]
     assert "torque_jerk_aware_available" in schema["capability_fields"]
 

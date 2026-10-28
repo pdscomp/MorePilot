@@ -19,8 +19,10 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.mads.helpers import MadsSteeringModeOnBrake, get_mads_limited_brands
 from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AUTO_LANE_CHANGE_TIMER, AutoLaneChangeMode
 from openpilot.sunnypilot.selfdrive.controls.lib.lane_change_smoothing import LEVEL_OFF, read_level
-from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import TUNE_PARAM_BY_SIZE, jerk_aware_has_effect, mazda_v2_ab_available, resolved_tune_versions, \
-  ti_tune_eligible, versions_by_label
+from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import (
+  TI_TUNE_VERSIONS, TUNE_PARAM_BY_SIZE, jerk_aware_has_effect, mazda_v2_ab_available, resolved_tune_versions,
+  ti_tune_eligible, versions_by_label,
+)
 from openpilot.system.ui.lib.application import gui_app
 
 MADS_STEERING_MODE_LABELS = [tr("remain"), tr("pause"), tr("disengage")]
@@ -176,7 +178,7 @@ class SteeringLayoutMici(NavScroller):
 
     for big, item in zip((False, True), self._tq_versions, strict=True):
       item.set_blocked_options(lambda item=item: {i for i, value in enumerate(item._values or [])
-                                                if value in (40.0, 42.0) and not ti_tune_eligible(ui_state.CP)})
+                                                if value in TI_TUNE_VERSIONS and not ti_tune_eligible(ui_state.CP)})
       item.set_value_resolver(lambda big=big: resolved_tune_versions(ui_state.params, CP=ui_state.CP)[big])
 
     self._tq_predictive = BigParamControlSP(tr("predictive turn-in"), "TorqueTuneV2PredictiveTurnIn",

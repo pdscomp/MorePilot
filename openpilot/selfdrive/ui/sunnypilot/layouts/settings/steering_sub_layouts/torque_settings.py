@@ -8,7 +8,7 @@ from collections.abc import Callable
 import pyray as rl
 
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import (TUNE_PARAM_BY_SIZE, jerk_aware_has_effect, label_for,
+from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import (TI_TUNE_VERSIONS, TUNE_PARAM_BY_SIZE, jerk_aware_has_effect, label_for,
                                                                       mazda_v2_ab_available, resolved_tune_versions,
                                                                       ti_tune_eligible, versions_by_label)
 from openpilot.system.ui.lib.application import gui_app, FontWeight
@@ -182,7 +182,7 @@ class TorqueSettingsLayout(Widget):
 
   def _show_torque_version_dialog(self, big: bool):
     options_map = {label: version for label, version in self.cached_torque_versions.items()
-                   if version not in (40.0, 42.0) or ti_tune_eligible(ui_state.CP)}
+                   if version not in TI_TUNE_VERSIONS or ti_tune_eligible(ui_state.CP)}
     # newest first
     sorted_labels = sorted(options_map, key=lambda k: options_map[k], reverse=True)
     folders = [TreeFolder("", [TreeNode(label) for label in sorted_labels])]

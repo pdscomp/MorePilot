@@ -224,6 +224,43 @@ class TestMultiParamValueMapping:
     assert "reboot" in text
 
 
+class TestTorqueV43Eligibility:
+  @pytest.mark.parametrize('eligible', [False, True, None])
+  @pytest.mark.parametrize('big', [False, True])
+  def test_torque_v43_mici_and_tici_options(self, params, monkeypatch, eligible, big):
+    from opendbc.car.mazda.values import MazdaFlags
+    from opendbc.car.structs import car
+    from openpilot.selfdrive.ui.sunnypilot.mici.layouts.steering import SteeringLayoutMici
+    from openpilot.selfdrive.ui.sunnypilot.layouts.settings.steering_sub_layouts import torque_settings
+    from openpilot.selfdrive.ui.ui_state import ui_state
+    from openpilot.system.ui.lib.application import gui_app
+    CP = None
+    if eligible is not None:
+      CP = car.CarParams.new_message(brand='mazda', flags=int(MazdaFlags.TORQUE_INTERCEPTOR) if eligible else 0)
+      CP.lateralTuning.init('torque')
+    monkeypatch.setattr(ui_state, 'CP', CP)
+    monkeypatch.setattr(gui_app, 'push_widget', lambda widget: None)
+    params.put_bool('EnforceTorqueControl', True, block=True)
+    params.put('TorqueControlTune', 42.0, block=True)
+    params.put('TorqueControlTuneBig', 42.0, block=True)
+    selector = SteeringLayoutMici()._tq_versions[int(big)]
+    index = selector._values.index(43.0)
+    assert (index not in selector._blocked_options()) is bool(eligible)
+    layout = torque_settings.TorqueSettingsLayout(lambda: None)
+    layout._show_torque_version_dialog(big)
+    dialog = layout._torque_version_dialog
+    labels = [node.ref for folder in dialog.folders for node in folder.nodes]
+    label = 'v43.0 (TI, A highway test)'
+    assert (label in labels) is bool(eligible)
+    if eligible:
+      dialog.selection_ref = label
+      dialog.on_exit(torque_settings.DialogResult.CONFIRM)
+      key = 'TorqueControlTuneBig' if big else 'TorqueControlTune'
+      other = 'TorqueControlTune' if big else 'TorqueControlTuneBig'
+      assert wait_for_param(params, key) == 43.0
+      assert params.get(other) == 42.0
+
+
 class TestDependentSettings:
   """A setting whose parent makes it inert locks, still showing the user's value on a grey pill."""
 

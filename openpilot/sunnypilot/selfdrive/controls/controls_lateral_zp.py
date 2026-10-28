@@ -18,8 +18,10 @@ from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import Lat
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v2 import LatControlTorque as LatControlTorqueV2
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v40 import LatControlTorque as LatControlTorqueV40
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v42 import LatControlTorque as LatControlTorqueV42
+from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v43 import LatControlTorque as LatControlTorqueV43
 from openpilot.sunnypilot.selfdrive.controls.lib.steer_limit import classify
-from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import resolved_mazda_v2_mode, resolved_tune_versions, stored_tune_versions, ti_tune_eligible
+from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import (TI_TUNE_VERSIONS, resolved_mazda_v2_mode, resolved_tune_versions,
+                                                                    stored_tune_versions, ti_tune_eligible)
 
 # how long lateral control has to be inactive, continuously, before the torque tune follows
 # a model change: a one-frame drop (a steer fault flicker) would otherwise swap and resume
@@ -94,8 +96,12 @@ class ControlsLateralZP:
     seed_ti_defaults(self.params, self.CP)
 
     versions = resolved_tune_versions(self.params, self.CP.lateralTuning.which() == 'torque', CP=self.CP)
+    self._tune_versions = versions
+    self._model_size = None
+    self._active_tune_size = False
+    cloudlog.info("controlsd: torque tune selection small=%s big=%s starting=small", versions[False], versions[True])
     for big, requested in stored_tune_versions(self.params).items():
-      if requested in (40.0, 42.0) and versions[big] != requested:
+      if requested in TI_TUNE_VERSIONS and versions[big] != requested:
         cloudlog.warning("controlsd: unsupported TI tune %.1f on this car; using v0", requested)
 
     def build(version):
@@ -104,6 +110,8 @@ class ControlsLateralZP:
         return LatControlTorqueV40(self.CP, self.CP_SP, CI, dt)
       if version == 42.0 and ti_tune:
         return LatControlTorqueV42(self.CP, self.CP_SP, CI, dt, mazda_v2_mode=resolved_mazda_v2_mode(self.params, self.CP))
+      if version == 43.0 and ti_tune:
+        return LatControlTorqueV43(self.CP, self.CP_SP, CI, dt)
       if version == 0.0:
         return LatControlTorqueV0(self.CP, self.CP_SP, CI, dt)
       if version == 2.0:
@@ -130,15 +138,23 @@ class ControlsLateralZP:
     pushes the live torque params, modelV2 and the lag into it. An engagement on the very
     frame after the swap would find it unprimed; priming it here would need the frame's
     CarState, which state_control has and this does not."""
+    big = bool(sm['modelV2'].big)
+    if big != self._model_size:
+      old = "unknown" if self._model_size is None else ("big" if self._model_size else "small")
+      mono_ns = getattr(sm, 'logMonoTime', {}).get('modelV2', 0)
+      cloudlog.info("controlsd: model size %s->%s modelMonoTime=%d", old, "big" if big else "small", mono_ns)
+      self._model_size = big
     if len(self._lacs) == 1 or self._inactive_frames < TUNE_SWAP_INACTIVE_FRAMES:
       return
-    big = bool(sm['modelV2'].big)
     lac = self._lac_by_size[big]
     if lac is self.LaC:
       return
     self.LaC = lac
     lac.reset()
-    cloudlog.warning("controlsd: %s model, swapped to its torque tune", "big" if big else "small")
+    cloudlog.warning("controlsd: torque tune swap %s->%s for %s model; selectors small=%s big=%s",
+                     self._tune_versions[self._active_tune_size], self._tune_versions[big], "big" if big else "small",
+                     self._tune_versions[False], self._tune_versions[True])
+    self._active_tune_size = big
 
   def get_lat_active(self, sm: messaging.SubMaster) -> bool:
     self._lat_active_last = self._get_lat_active(sm)

@@ -47,6 +47,7 @@ def controls():
   for _ in range(300):
     step(small, make_cs(v_ego=20.0, lat_accel=-1.5), -1.5 / 20.0 ** 2)
   ctl = SimpleNamespace(_lacs=(small, big), _lac_by_size={False: small, True: big}, LaC=big, _inactive_frames=0,
+                        _model_size=None, _active_tune_size=True, _tune_versions={False: 2.0, True: 1.0},
                         turn_assist=TurnAssistController(make_cp()), lane_change_smoothing=LaneChangeSmoothing())
   ctl.note_lat_active = lambda active: ControlsExt.note_lat_active(ctl, active)
   return ctl

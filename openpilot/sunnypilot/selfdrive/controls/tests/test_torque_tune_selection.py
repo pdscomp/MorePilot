@@ -44,7 +44,8 @@ V1 = "v1"  # stands in for the `lac` upstream controller controlsd passes in
 V2 = "v2"
 V40 = "v40"
 V42 = "v42"
-BY_VERSION = {0.0: V0, 1.0: V1, 2.0: V2, 40.0: V40, 42.0: V42}
+V43 = "v43"
+BY_VERSION = {0.0: V0, 1.0: V1, 2.0: V2, 40.0: V40, 42.0: V42, 43.0: V43}
 PARAMS_KEYS_H = Path(__file__).resolve().parents[5] / "openpilot" / "common" / "params_keys.h"
 
 
@@ -68,6 +69,7 @@ def ctx(monkeypatch):
   monkeypatch.setattr(controls_lateral_zp, "LatControlTorqueV2", lambda *a, **k: FakeLaC(V2))
   monkeypatch.setattr(controls_lateral_zp, "LatControlTorqueV40", lambda *a, **k: FakeLaC(V40))
   monkeypatch.setattr(controls_lateral_zp, "LatControlTorqueV42", lambda *a, **k: FakeLaC(V42))
+  monkeypatch.setattr(controls_lateral_zp, "LatControlTorqueV43", lambda *a, **k: FakeLaC(V43))
   with OpenpilotPrefix():
     params = Params()
     params.put_bool("EnforceTorqueControl", True, block=True)  # the enforce-off tests flip it
@@ -104,13 +106,13 @@ class TestTorqueTuneSelection:
     require_current_libparams(params, "TorqueControlTune")
     assert select(controls) == BY_VERSION[declared_default()]
 
-  @pytest.mark.parametrize(("version", "expected"), [(0.0, V0), (1.0, V1), (2.0, V2), (40.0, V40), (42.0, V42)])
+  @pytest.mark.parametrize(("version", "expected"), [(0.0, V0), (1.0, V1), (2.0, V2), (40.0, V40), (42.0, V42), (43.0, V43)])
   def test_explicit_version_is_honored(self, ctx, version, expected):
     params, controls = ctx
     params.put("TorqueControlTune", version, block=True)
     assert select(controls) == expected
 
-  @pytest.mark.parametrize("version", [40.0, 42.0])
+  @pytest.mark.parametrize("version", [40.0, 42.0, 43.0])
   def test_ti_version_requires_final_cp_eligibility(self, ctx, version):
     params, controls = ctx
     CP = car.CarParams.new_message(steerControlType="torque")
@@ -134,7 +136,7 @@ class TestTorqueTuneSelection:
     but not wired here would surface in every selector and silently run v1."""
     from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import load_versions
 
-    wired = {0.0: V0, 1.0: V1, 2.0: V2, 40.0: V40, 42.0: V42}
+    wired = BY_VERSION
     declared = {float(info["version"]) for info in load_versions().values()}
     assert declared == set(wired), "declared tune versions must match the wired controllers"
 
@@ -257,6 +259,7 @@ class TestTorqueTuneSelection:
   @pytest.mark.parametrize(("small", "big", "enforce", "expected"), [
     (2.0, 2.0, True, False), (2.0, 42.0, True, False), (42.0, 2.0, True, False), (42.0, 42.0, True, False),
     (2.0, 1.0, True, True), (0.0, 2.0, True, True), (2.0, 2.0, False, True),
+    (42.0, 43.0, True, False), (43.0, 43.0, True, False), (43.0, 40.0, True, True),
     (40.0, 42.0, True, True), (42.0, 40.0, True, True), (1.0, 42.0, True, True), (40.0, 40.0, True, True)])
   def test_jerk_aware_has_effect_unless_every_size_runs_v2_or_v42(self, ctx, small, big, enforce, expected):
     """v2 forces the jerk-aware controller off, so its toggle only locks when both sizes run
@@ -419,3 +422,45 @@ class TestRealTorqueDispatch:
       assert self._version(controls.LaC) == 0
       assert params.get("TorqueControlTune") == 40.0
       assert params.get("TorqueControlTuneBig") == 42.0
+
+  @pytest.mark.parametrize("small,big", [(43.0, 42.0), (42.0, 43.0), (43.0, 43.0), (42.0, 42.0)])
+  def test_real_v43_dispatch_and_mode(self, small, big):
+    from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import MazdaTorqueV2Mode
+    from openpilot.sunnypilot.selfdrive.controls.tests.test_latcontrol_torque_v42 import make_ci
+    with OpenpilotPrefix():
+      params = Params()
+      params.put("MazdaTorqueV2Mode", 1, block=True)
+      controls = self._controls(params, small, big, True)
+      controls.LaC = ControlsLateralZP.initialize_lateral_control(controls, FakeLaC(V1), make_ci(), 0.01)
+      for size, version in ((False, small), (True, big)):
+        lac = controls._lac_by_size[size]
+        assert type(lac).__module__.endswith(f"latcontrol_torque_v{int(version)}")
+        assert self._version(lac) == int(version)
+        assert lac.mazda_v2_mode == (MazdaTorqueV2Mode.B if version == 42.0 else MazdaTorqueV2Mode.A)
+      assert (controls._lac_by_size[False] is controls._lac_by_size[True]) == (small == big)
+
+
+def test_model_size_and_tune_swap_logging(ctx, monkeypatch):
+  params, controls = ctx
+  params.put("TorqueControlTune", 43.0, block=True)
+  params.put("TorqueControlTuneBig", 42.0, block=True)
+  info, warning = MagicMock(), MagicMock()
+  monkeypatch.setattr(controls_lateral_zp.cloudlog, "info", info)
+  monkeypatch.setattr(controls_lateral_zp.cloudlog, "warning", warning)
+  select(controls)
+  sm = SimpleNamespace(logMonoTime={'modelV2': 123456})
+  class SubMaster:
+    logMonoTime = sm.logMonoTime
+    def __getitem__(self, key):
+      return SimpleNamespace(big=True)
+  controls._inactive_frames = 0
+  ControlsLateralZP.select_lateral_control(controls, SubMaster())
+  ControlsLateralZP.select_lateral_control(controls, SubMaster())
+  transitions = [call for call in info.call_args_list if 'model size' in call.args[0]]
+  assert len(transitions) == 1
+  assert transitions[0].args[1:] == ('unknown', 'big', 123456)
+  assert controls.LaC == V43
+  controls._inactive_frames = TUNE_SWAP_INACTIVE_FRAMES
+  ControlsLateralZP.select_lateral_control(controls, SubMaster())
+  assert controls.LaC == V42
+  assert warning.call_args.args[1:] == (43.0, 42.0, 'big', 43.0, 42.0)
