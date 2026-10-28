@@ -227,11 +227,11 @@ class UIStateSP(UIStateZP):
         self.params.remove("EnforceTorqueControl")
         self.params.remove("NeuralNetworkLateralControl")
         self.params.remove("LateralJerkTorqueController")
-        self.params.remove("AlphaLongitudinalEnabled")
 
     # No longitudinal control: no experimental mode. DEC, speed assist, custom ACC and
     # SCC keep their values; card and the planner leave them idle until long or ICBM returns.
-    if not has_long:
+    # Unknown car identity must not erase the user's saved mode.
+    if CP is not None and not has_long:
       self.params.remove("ExperimentalMode")
 
     # ICBM has no toggle: the features that act through it can, wherever the car has it
