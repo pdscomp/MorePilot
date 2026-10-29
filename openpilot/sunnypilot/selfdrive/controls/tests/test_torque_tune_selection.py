@@ -448,12 +448,21 @@ def test_model_size_and_tune_swap_logging(ctx, monkeypatch):
   monkeypatch.setattr(controls_lateral_zp.cloudlog, "info", info)
   monkeypatch.setattr(controls_lateral_zp.cloudlog, "warning", warning)
   select(controls)
-  sm = SimpleNamespace(logMonoTime={'modelV2': 123456})
   class SubMaster:
-    logMonoTime = sm.logMonoTime
+    def __init__(self, big=True, updated=True, valid=True, mono=123456):
+      self.logMonoTime = {'modelV2': mono}
+      self.updated = {'modelV2': updated}
+      self.valid = {'modelV2': valid}
+      self._big = big
     def __getitem__(self, key):
-      return SimpleNamespace(big=True)
+      return SimpleNamespace(big=self._big)
   controls._inactive_frames = 0
+  # a stale frame and then an invalid frame: neither advances identity or logs
+  ControlsLateralZP.select_lateral_control(controls, SubMaster(updated=False, mono=0))
+  assert controls._model_size is None
+  ControlsLateralZP.select_lateral_control(controls, SubMaster(valid=False, mono=0))
+  assert controls._model_size is None
+  # first fresh valid frame logs exactly once; a repeat does not
   ControlsLateralZP.select_lateral_control(controls, SubMaster())
   ControlsLateralZP.select_lateral_control(controls, SubMaster())
   transitions = [call for call in info.call_args_list if 'model size' in call.args[0]]

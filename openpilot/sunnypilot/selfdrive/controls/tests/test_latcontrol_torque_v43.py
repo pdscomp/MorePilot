@@ -147,4 +147,3 @@ def test_real_handover_waits_and_primes(params, small, big, initial_big):
     step(incoming, make_cs(20.0, 0.1), 0.001, active=False)
   assert incoming.previous_measurement == pytest.approx(0.1)
   assert math.isfinite(step(incoming, make_cs(20.0, 0.1), 0.001).output)
-

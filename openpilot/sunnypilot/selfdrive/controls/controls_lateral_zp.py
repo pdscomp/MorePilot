@@ -138,8 +138,13 @@ class ControlsLateralZP:
     pushes the live torque params, modelV2 and the lag into it. An engagement on the very
     frame after the swap would find it unprimed; priming it here would need the frame's
     CarState, which state_control has and this does not."""
+    # The identity tracker only advances on a fresh, valid modelV2 message: the initial
+    # default frame would otherwise log a phantom unknown->small and consume the first
+    # real transition. Controller selection keeps using the last received value. Fakes
+    # that only model the message default to fresh.
+    fresh = bool(getattr(sm, 'updated', {}).get('modelV2', True)) and bool(getattr(sm, 'valid', {}).get('modelV2', True))
     big = bool(sm['modelV2'].big)
-    if big != self._model_size:
+    if fresh and big != self._model_size:
       old = "unknown" if self._model_size is None else ("big" if self._model_size else "small")
       mono_ns = getattr(sm, 'logMonoTime', {}).get('modelV2', 0)
       cloudlog.info("controlsd: model size %s->%s modelMonoTime=%d", old, "big" if big else "small", mono_ns)
