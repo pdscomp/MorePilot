@@ -17,6 +17,7 @@ from typing import Any
 
 from openpilot.common.parameterized import parameterized
 
+from openpilot.sunnypilot.selfdrive.controls.lib.torque_tune import TI_TUNE_VERSIONS
 from openpilot.sunnypilot.sunnylink.tools.generate_settings_schema import (
   DEFINITION_PATH,
   TORQUE_TUNE_KEYS,
@@ -234,7 +235,7 @@ class TestTiTuneOptionAvailability(OpenpilotTestCase):
       item = _find_item(schema, key)
       for option in item["options"]:
         version = float(option["value"])
-        assert option.get("enablement") == (expected if version in (40.0, 42.0, 43.0) else None)
+        assert option.get("enablement") == (expected if version in TI_TUNE_VERSIONS else None)
     assert "mazda_ti_tunes_available" in schema["capability_fields"]
     assert "torque_jerk_aware_available" in schema["capability_fields"]
 
