@@ -22,6 +22,7 @@ MIN_POINTS_TOTAL_QLOG = 600
 FIT_POINTS_TOTAL = 2000
 FIT_POINTS_TOTAL_QLOG = 600
 MIN_VEL = 15  # m/s
+MIN_VEL_MAZDA = 10  # m/s; the TI Mazda's tune work lives at 8-14 m/s, upstream's floor starves it
 FRICTION_FACTOR = 1.5  # ~85% of data coverage
 FACTOR_SANITY = 0.3
 FACTOR_SANITY_QLOG = 0.5
@@ -34,6 +35,7 @@ LAT_ACC_THRESHOLD = 1
 STEER_BUCKET_BOUNDS = [(-0.5, -0.3), (-0.3, -0.2), (-0.2, -0.1), (-0.1, 0), (0, 0.1), (0.1, 0.2), (0.2, 0.3), (0.3, 0.5)]
 MIN_BUCKET_POINTS = np.array([100, 300, 500, 500, 500, 500, 300, 100])
 MIN_ENGAGE_BUFFER = 2  # secs
+PARTIAL_FIT_MIN_CALPERC = 50.0  # self-tune: track the fit past this calibration before full validity
 
 VERSION = 1  # bump this to invalidate old parameter caches
 ALLOWED_CARS = ['toyota', 'hyundai', 'rivian', 'honda', 'volkswagen']
@@ -60,6 +62,7 @@ class TorqueEstimator(ParameterEstimator, TorqueEstimatorExt):
     self.CP = CP
     self.hist_len = int(HISTORY / DT_MDL)
     self.lag = 0.0
+    self.min_vel = MIN_VEL
     self.track_all_points = track_all_points  # for offline analysis, without max lateral accel or max steer torque filters
     if decimated:
       self.min_bucket_points: list[float] = (MIN_BUCKET_POINTS / 10).tolist()
@@ -120,9 +123,11 @@ class TorqueEstimator(ParameterEstimator, TorqueEstimatorExt):
               'latAccelOffset': cache_ltp.latAccelOffsetFiltered,
               'frictionCoefficient': cache_ltp.frictionCoefficientFiltered
             }
+            # decay rides along only with the values: restoring it without them would
+            # ratchet the filter slower across reboots that never keep the tune
+            self.decay = cache_ltp.decay
           cached_points: list[list[float]] = [list(point) for point in cache_ltp.points]
           initial_params['points'] = cached_points
-          self.decay = cache_ltp.decay
           self.filtered_points.load_points(cached_points)
           cloudlog.info("restored torque params from cache")
       except Exception:
@@ -209,12 +214,16 @@ class TorqueEstimator(ParameterEstimator, TorqueEstimatorExt):
         lateral_acc = (vego * yaw_rate) - (np.sin(roll) * ACCELERATION_DUE_TO_GRAVITY).item()
         if all(lat_active) and not any(steer_override) and (abs(steer) > STEER_MIN_THRESHOLD) and (abs(lateral_acc) <= LAT_ACC_THRESHOLD):
           self._on_torque_point(steer, lateral_acc, vego)
-        if all(lat_active) and not any(steer_override) and (vego > MIN_VEL) and (abs(steer) > STEER_MIN_THRESHOLD):
+        if all(lat_active) and not any(steer_override) and (vego > self.min_vel) and (abs(steer) > STEER_MIN_THRESHOLD):
           if abs(lateral_acc) <= LAT_ACC_THRESHOLD:
             self.filtered_points.add_point(steer, lateral_acc)
 
           if self.track_all_points:
             self.all_torque_points.append([steer, lateral_acc])
+
+  def _partial_fit_applies(self):
+    # the fork's explicit toggle path only; set in initialize_custom_params
+    return self.partial_fit_enabled and self.filtered_points.get_valid_percent() >= PARTIAL_FIT_MIN_CALPERC
 
   def get_msg(self, valid=True, with_points=False):
     msg = messaging.new_message('lateralTorqueParameters')
@@ -237,6 +246,16 @@ class TorqueEstimator(ParameterEstimator, TorqueEstimatorExt):
           self.reset()
         else:
           lateralTorqueParameters.valid = True
+          latAccelFactor = np.clip(latAccelFactor, self.min_lataccel_factor, self.max_lataccel_factor)
+          frictionCoeff = np.clip(frictionCoeff, self.min_friction, self.max_friction)
+          self.update_params({'latAccelFactor': latAccelFactor, 'latAccelOffset': latAccelOffset, 'frictionCoefficient': frictionCoeff})
+      elif self._partial_fit_applies():
+        # Short of valid, upstream keeps the filters frozen at the offline tune until every
+        # bucket fills, and a half-learned drive teaches the controller nothing. With self-tune
+        # on, track the fit once calibration passes PARTIAL_FIT_MIN_CALPERC instead: valid
+        # stays False so consumers that key on it are unchanged, and the sanity clip bounds
+        # how far a sparse fit can move the tune.
+        if not any(val is None or np.isnan(val) for val in [latAccelFactor, latAccelOffset, frictionCoeff]):
           latAccelFactor = np.clip(latAccelFactor, self.min_lataccel_factor, self.max_lataccel_factor)
           frictionCoeff = np.clip(frictionCoeff, self.min_friction, self.max_friction)
           self.update_params({'latAccelFactor': latAccelFactor, 'latAccelOffset': latAccelOffset, 'frictionCoefficient': frictionCoeff})

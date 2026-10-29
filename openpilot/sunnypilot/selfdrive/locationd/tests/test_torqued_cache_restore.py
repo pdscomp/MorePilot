@@ -331,6 +331,17 @@ class TestCacheRestoreGolden:
     assert est.decay == 173.25
     assert est.speed_bin_decays == [est.decay] * n_bins
 
+  def test_invalid_upstream_cache_resets_decay(self, fake_params):
+    """valid=False keeps the cached points but not the tune; decay must not ride along
+    without the values, or every reboot restarts the offline tune on a slower filter."""
+    CP = make_cp()
+    _, cache_sp, _ = self._healthy_cache(CP, decay=200.0)
+    invalid = make_cache(decay=200.0, valid=False).to_bytes()
+    est = self._restore_from(fake_params, CP, invalid, cache_sp)
+
+    assert est.decay == MIN_FILTER_DECAY
+    assert est.filtered_params['latAccelFactor'].x == pytest.approx(CP.lateralTuning.torque.latAccelFactor, abs=0.01)
+
   def test_prev_route_carparams_mismatch_rejected(self, fake_params):
     """CarParamsPrevRoute is part of upstream's key: a cache learned under other offline seeds
     or another fingerprint does not apply here, points included."""

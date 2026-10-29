@@ -41,6 +41,9 @@ class TorqueEstimatorExt(SpeedBinLearner):
     # override, which only pauses the learner's output.
     self_tune = self.use_live_torque_params if self.enforce_torque_control_toggle else self.use_params
     self.speed_binned = self.CP.lateralTuning.which() == 'torque' and self_tune
+    # Partial-fit rides the explicit toggle path only: brand-based self-tune on
+    # upstream-supported cars keeps upstream's frozen-until-valid behavior.
+    self.partial_fit_enabled = self.enforce_torque_control_toggle and self_tune
     self.update_use_params()
 
     if self.enforce_torque_control_toggle:
@@ -58,6 +61,12 @@ class TorqueEstimatorExt(SpeedBinLearner):
 
     # bins and their cache must exist before the first get_msg
     self._init_speed_bins()
+
+    if self.CP.brand == 'mazda' and self_tune:
+      # upstream's 15 m/s floor excludes the 8-14 m/s range this car's tune work happens in;
+      # self-tune only, so TI-off configurations and offline replays keep upstream's floor
+      from openpilot.selfdrive.locationd.torqued import MIN_VEL_MAZDA
+      self.min_vel = MIN_VEL_MAZDA
 
   def _update_params(self):
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
